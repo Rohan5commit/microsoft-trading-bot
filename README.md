@@ -1,40 +1,20 @@
 # Microsoft Trading Bot
 
-AI-powered trading bot using TradingAgents (multi-agent LLM analysis) + NVIDIA NIM + Twelve Data + Alpaca.
+AI-powered trading bot using TradingAgents + NVIDIA NIM + Twelve Data.
 
-## Architecture
+## How It Works
+
+Two-phase analysis for **full quality at speed**:
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Cloud Server / Scheduler                       │
-│                                                  │
-│  ┌─────────────┐    ┌──────────────────────┐    │
-│  │ Scheduler   │───>│ TradingAgents         │    │
-│  │ (daily cron)│    │  - NVIDIA NIM (free)  │    │
-│  └─────────────┘    │  - Twelve Data        │    │
-│                     └──────────┬───────────┘    │
-│                                │                 │
-│                     ┌──────────▼───────────┐    │
-│                     │ Decision Parser       │    │
-│                     │  - Buy/Hold/Sell      │    │
-│                     │  - Conviction level   │    │
-│                     └──────────┬───────────┘    │
-│                                │                 │
-│                     ┌──────────▼───────────┐    │
-│                     │ Alpaca API            │    │
-│                     │  - Paper trading      │    │
-│                     │  - Then live          │    │
-│                     └──────────────────────┘    │
-└─────────────────────────────────────────────────┘
+Phase 1 (5 min):     Quick scan 1000 stocks -> Top 20 candidates
+Phase 2 (90 min):    Full TradingAgents deep analysis on candidates
 ```
 
-## Features
-
-- **TradingAgents**: Multi-agent LLM analysis framework (88k+ GitHub stars)
-- **NVIDIA NIM**: Free LLM inference for trading decisions
-- **Twelve Data**: Real-time market data with 8-key rotation
-- **Alpaca**: Paper and live trading execution
-- **Risk Management**: Position sizing, stop-loss, take-profit, daily loss limits
+| Phase | Method | Time | Quality |
+|-------|--------|------|---------|
+| 1 | Single LLM call per stock | ~5 min for 1000 | Quick filter |
+| 2 | 8+ agents, bull/bear debate | ~5 min per stock | Full research |
 
 ## Setup
 
@@ -52,15 +32,11 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env with your keys
 ```
 
 Required:
 - `NVIDIA_API_KEY` — Free from [build.nvidia.com](https://build.nvidia.com/)
-- `TWELVE_DATA_KEYS` — Comma-separated API keys from [twelvedata.com](https://twelvedata.com/)
-
-Optional:
-- `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` — From [app.alpaca.markets](https://app.alpaca.markets/paper/dashboard)
+- `TWELVE_DATA_KEYS` — From [twelvedata.com](https://twelvedata.com/)
 
 ### 3. Verify Setup
 
@@ -70,44 +46,52 @@ python bot/setup.py
 
 ## Usage
 
-### Analyze Single Stock
+### Analyze Specific Stocks
 
 ```bash
-python bot/bot.py --analyze NVDA
-python bot/bot.py --analyze AAPL --date 2025-01-15
+python bot/two_phase_scheduler.py --tickers NVDA AAPL MSFT --deep-count 3
 ```
 
-### Run Daily Cycle
+### Full Universe (1000 stocks)
 
 ```bash
-python bot/bot.py --daily
-python bot/bot.py --daily --tickers AAPL MSFT NVDA
-```
-
-### Check Status
-
-```bash
-python bot/bot.py --status
-```
-
-### Backtest
-
-```bash
-python bot/backtest.py --tickers AAPL MSFT NVDA GOOGL META
+python bot/two_phase_scheduler.py --deep-count 20
 ```
 
 ## GitHub Actions
 
-The bot runs daily via GitHub Actions. See `.github/workflows/daily-analysis.yml`.
+Runs daily at 9:30 AM ET on weekdays.
+
+### Manual Trigger
+
+```bash
+gh workflow run daily-analysis.yml
+
+# With specific tickers
+gh workflow run daily-analysis.yml -f tickers="NVDA,AAPL,MSFT" -f deep_count=5
+```
 
 ### Secrets Required
 
-Set these in GitHub repo Settings > Secrets:
+Set in GitHub repo Settings > Secrets:
 
-- `NVIDIA_API_KEY`
-- `TWELVE_DATA_KEYS`
-- `ALPACA_API_KEY` (optional)
-- `ALPACA_SECRET_KEY` (optional)
+| Secret | Required |
+|--------|----------|
+| `NVIDIA_API_KEY` | Yes |
+| `TWELVE_DATA_KEYS` | Yes |
+| `ALPACA_API_KEY` | Optional (for trading) |
+| `ALPACA_SECRET_KEY` | Optional (for trading) |
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `two_phase_bot.py` | Main two-phase analysis engine |
+| `two_phase_scheduler.py` | Entry point for GitHub Actions |
+| `twelve_data.py` | Market data with 8-key rotation |
+| `risk_manager.py` | Position sizing & risk rules |
+| `universe.py` | Stock universe management |
+| `config.json` | Configuration |
 
 ## Configuration
 
@@ -116,18 +100,17 @@ Edit `bot/config.json`:
 ```json
 {
   "universe": {
-    "max_stocks": 100,
-    "min_market_cap_billion": 10
+    "max_stocks": 1000,
+    "min_market_cap_billion": 2
   },
-  "risk": {
-    "max_position_pct": 10.0,
-    "max_positions": 10,
-    "stop_loss_pct": 5.0,
-    "take_profit_pct": 20.0
+  "deep_analysis": {
+    "count": 20,
+    "min_conviction": 0.6
   },
   "llm": {
     "provider": "nvidia",
-    "deep_think_model": "meta/llama-3.1-70b-instruct"
+    "deep_think_model": "meta/llama-3.1-70b-instruct",
+    "quick_think_model": "meta/llama-3.1-8b-instruct"
   }
 }
 ```

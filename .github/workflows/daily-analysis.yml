@@ -1,20 +1,28 @@
-name: Daily Analysis
+name: Daily Trading Analysis
 
 on:
   schedule:
     # Run at 9:30 AM ET (14:30 UTC) on weekdays
     - cron: '30 14 * * 1-5'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
     inputs:
       tickers:
-        description: 'Comma-separated tickers (leave empty for top 5 universe)'
+        description: 'Comma-separated tickers (leave empty for full universe)'
         required: false
         default: ''
+      deep_count:
+        description: 'Number of stocks for deep analysis'
+        required: false
+        default: '20'
+      concurrent:
+        description: 'Max concurrent analyses (phase 1)'
+        required: false
+        default: '20'
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # 1 hour max per run
+    timeout-minutes: 120  # 2 hours for deep analysis
     
     steps:
       - name: Checkout repository
@@ -31,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run analysis
+      - name: Run two-phase analysis
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           TWELVE_DATA_KEYS: ${{ secrets.TWELVE_DATA_KEYS }}
@@ -46,18 +54,17 @@ jobs:
         run: |
           cd bot
           if [ -n "${{ github.event.inputs.tickers }}" ]; then
-            # Parse comma-separated tickers into space-separated for --tickers
             TICKERS=$(echo "${{ github.event.inputs.tickers }}" | tr ',' ' ')
-            python bot.py --daily --tickers $TICKERS
+            python two_phase_scheduler.py --tickers $TICKERS --deep-count ${{ github.event.inputs.deep_count || '20' }} --concurrent ${{ github.event.inputs.concurrent || '20' }}
           else
-            python scheduler.py daily
+            python two_phase_scheduler.py --deep-count ${{ github.event.inputs.deep_count || '20' }} --concurrent ${{ github.event.inputs.concurrent || '20' }}
           fi
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: analysis-results-${{ github.run_number }}
+          name: two-phase-results-${{ github.run_number }}
           path: bot/results/
           retention-days: 30
 
@@ -65,7 +72,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bot-logs-${{ github.run_number }}
+          name: two-phase-logs-${{ github.run_number }}
           path: |
             bot/bot.log
             bot/scheduler.log
