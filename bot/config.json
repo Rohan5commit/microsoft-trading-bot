@@ -38,5 +38,10 @@
   "deep_analysis": {
     "count": 20,
     "min_conviction": 0.3
+  },
+  "portfolio": {
+    "initial_capital": 100000.0,
+    "leverage": 2.0,
+    "previous_return_pct": 0.0
   }
 }

@@ -41,6 +41,12 @@ try:
 except (ImportError, ValueError):
     EMAIL_AVAILABLE = False
 
+try:
+    from portfolio import PortfolioTracker
+    PORTFOLIO_AVAILABLE = True
+except (ImportError, ValueError):
+    PORTFOLIO_AVAILABLE = False
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -79,6 +85,20 @@ class TwoPhaseBot:
         if EMAIL_AVAILABLE and os.getenv("GMAIL_APP_PASSWORD"):
             try:
                 self.email_sender = EmailSender()
+            except Exception:
+                pass
+
+        # Portfolio tracker optional
+        self.portfolio = None
+        if PORTFOLIO_AVAILABLE:
+            try:
+                self.portfolio = PortfolioTracker()
+                # Apply config settings
+                portfolio_config = self.config.get("portfolio", {})
+                if "initial_capital" in portfolio_config:
+                    self.portfolio.initial_capital = portfolio_config["initial_capital"]
+                if "leverage" in portfolio_config:
+                    self.portfolio.leverage = portfolio_config["leverage"]
             except Exception:
                 pass
 
@@ -131,6 +151,39 @@ class TwoPhaseBot:
         except Exception as e:
             logger.error(f"Email error: {e}")
             return False
+
+    def send_error_email(self, error_message: str, traceback_str: str = "") -> bool:
+        """Send error notification email."""
+        if not self.email_sender:
+            logger.info("Email sender not configured, skipping error email")
+            return False
+
+        try:
+            success = self.email_sender.send_error_notification(error_message, traceback_str)
+            if success:
+                logger.info("Error notification email sent")
+            else:
+                logger.error("Failed to send error notification email")
+            return success
+        except Exception as e:
+            logger.error(f"Error email failed: {e}")
+            return False
+
+    def get_portfolio_metrics(self, alpaca_status: Optional[dict] = None) -> Optional[dict]:
+        """Get portfolio return metrics if tracker is available."""
+        if not self.portfolio:
+            return None
+
+        try:
+            if alpaca_status:
+                current_equity = alpaca_status.get("portfolio_value", 0)
+            else:
+                current_equity = self.portfolio.initial_capital
+
+            return self.portfolio.get_status(current_equity)
+        except Exception as e:
+            logger.error(f"Portfolio metrics error: {e}")
+            return None
 
     def batch_get_prices(self, tickers: list[str]) -> dict[str, float]:
         """Fetch prices for multiple tickers concurrently."""
@@ -349,6 +402,9 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         # Get Alpaca account status
         alpaca_status = self.get_alpaca_status()
 
+        # Get portfolio metrics
+        portfolio_metrics = self.get_portfolio_metrics(alpaca_status)
+
         # Compile final results
         total_elapsed = time.time() - total_start
 
@@ -372,6 +428,7 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             "deep_results": deep_results,
             "candidates": candidates,
             "alpaca_status": alpaca_status,
+            "portfolio_metrics": portfolio_metrics,
         }
 
         # Send email with results and Alpaca status

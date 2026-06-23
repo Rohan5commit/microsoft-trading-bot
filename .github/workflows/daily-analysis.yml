@@ -2,8 +2,8 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    # Run at 9:30 AM ET (14:30 UTC) on weekdays
-    - cron: '30 14 * * 1-5'
+    # Run at 11:30 PM IST (18:00 UTC) on weekdays
+    - cron: '0 18 * * 1-5'
   workflow_dispatch:
     inputs:
       tickers:
@@ -40,6 +40,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run two-phase analysis
+        id: run_analysis
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           TWELVE_DATA_KEYS: ${{ secrets.TWELVE_DATA_KEYS }}
@@ -62,6 +63,63 @@ jobs:
           else
             python two_phase_scheduler.py --deep-count ${{ github.event.inputs.deep_count || '20' }} --concurrent ${{ github.event.inputs.concurrent || '20' }}
           fi
+
+      - name: Send error notification
+        if: failure() && steps.run_analysis.outcome == 'failure'
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: |
+          pip install jinja2
+          python -c "
+          import smtplib
+          import os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          from datetime import datetime
+
+          sender = os.environ['SENDER_EMAIL']
+          password = os.environ['GMAIL_APP_PASSWORD']
+          receiver = os.environ['RECEIVER_EMAIL']
+
+          subject = f'Microsoft Trading Bot - ERROR {datetime.now().strftime(\"%Y-%m-%d %H:%M\")}'
+          html = f'''
+          <!DOCTYPE html>
+          <html>
+          <body style=\"margin: 0; padding: 0; background-color: #0f0f23; font-family: Segoe UI, sans-serif;\">
+            <div style=\"max-width: 800px; margin: 0 auto; padding: 20px;\">
+              <div style=\"background: linear-gradient(135deg, #2e1a1a 0%, #3e1616 100%); border-radius: 15px; padding: 30px; margin-bottom: 20px; border: 1px solid #ff1744;\">
+                <h1 style=\"color: #ff1744; margin: 0; font-size: 28px;\">Microsoft Trading Bot</h1>
+                <p style=\"color: #ff8a80; margin: 5px 0 0 0;\">ERROR REPORT</p>
+                <p style=\"color: #666; margin: 5px 0 0 0; font-size: 12px;\">{datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")}</p>
+              </div>
+              <div style=\"background: #1a1a2e; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #ff1744;\">
+                <h2 style=\"color: #ff1744; margin-top: 0;\">Bot Failed</h2>
+                <div style=\"background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 15px;\">
+                  <div style=\"color: #ff8a80; font-size: 12px; margin-bottom: 5px;\">ERROR</div>
+                  <div style=\"color: #fff; font-size: 16px;\">The two-phase analysis pipeline failed. Check GitHub Actions logs for details.</div>
+                </div>
+              </div>
+              <div style=\"text-align: center; padding: 20px; color: #666; font-size: 12px;\">
+                <p>Microsoft Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
+              </div>
+            </div>
+          </body>
+          </html>
+          '''
+
+          msg = MIMEMultipart('alternative')
+          msg['Subject'] = subject
+          msg['From'] = f'Microsoft Trading Bot <{sender}>'
+          msg['To'] = receiver
+          msg.attach(MIMEText(html, 'html'))
+
+          with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+              server.login(sender, password)
+              server.sendmail(sender, receiver, msg.as_string())
+          print('Error notification sent')
+          "
 
       - name: Upload results
         if: always()

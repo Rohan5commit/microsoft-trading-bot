@@ -68,11 +68,71 @@ class EmailSender:
         phase2 = results.get("phase2", {})
         deep_results = results.get("deep_results", [])
         total_time = results.get("total_elapsed_seconds", 0)
+        portfolio_metrics = results.get("portfolio_metrics")
 
         # Build buy/sell signals
         buy_signals = [r for r in deep_results if r.get("action") == "buy"]
         sell_signals = [r for r in deep_results if r.get("action") == "sell"]
         hold_signals = [r for r in deep_results if r.get("action") == "hold"]
+
+        # Portfolio metrics section
+        portfolio_html = ""
+        if portfolio_metrics:
+            period_return = portfolio_metrics.get("period_return_pct", 0)
+            cumulative_return = portfolio_metrics.get("cumulative_return_pct", 0)
+            dollar_pnl = portfolio_metrics.get("dollar_pnl", 0)
+            total_dollar_pnl = portfolio_metrics.get("total_dollar_pnl", 0)
+            exposure_divisor = portfolio_metrics.get("exposure_divisor", 0)
+            leverage = portfolio_metrics.get("leverage", 1)
+            initial_capital = portfolio_metrics.get("initial_capital", 0)
+            reset_baseline = portfolio_metrics.get("reset_baseline", 0)
+
+            period_color = "#00c853" if period_return >= 0 else "#ff1744"
+            cumulative_color = "#00c853" if cumulative_return >= 0 else "#ff1744"
+            dollar_color = "#00c853" if dollar_pnl >= 0 else "#ff1744"
+            total_color = "#00c853" if total_dollar_pnl >= 0 else "#ff1744"
+
+            portfolio_html = f"""
+            <div style="background: #1a1a2e; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #00d4ff;">
+                <h2 style="color: #00d4ff; margin-top: 0;">Portfolio Return Metrics</h2>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Initial Capital (C0)</div>
+                        <div style="color: #fff; font-size: 20px; font-weight: bold;">${initial_capital:,.2f}</div>
+                    </div>
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Leverage (L)</div>
+                        <div style="color: #00d4ff; font-size: 20px; font-weight: bold;">{leverage:.1f}x</div>
+                    </div>
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Exposure Divisor (B)</div>
+                        <div style="color: #fff; font-size: 20px; font-weight: bold;">${exposure_divisor:,.2f}</div>
+                    </div>
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Reset Baseline (E_reset)</div>
+                        <div style="color: #fff; font-size: 20px; font-weight: bold;">${reset_baseline:,.2f}</div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 15px;">
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Period Return</div>
+                        <div style="color: {period_color}; font-size: 24px; font-weight: bold;">{period_return:+.2f}%</div>
+                    </div>
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Cumulative Return</div>
+                        <div style="color: {cumulative_color}; font-size: 24px; font-weight: bold;">{cumulative_return:+.2f}%</div>
+                    </div>
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Period P&L</div>
+                        <div style="color: {dollar_color}; font-size: 24px; font-weight: bold;">${dollar_pnl:+,.2f}</div>
+                    </div>
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
+                        <div style="color: #888; font-size: 12px;">Total P&L</div>
+                        <div style="color: {total_color}; font-size: 24px; font-weight: bold;">${total_dollar_pnl:+,.2f}</div>
+                    </div>
+                </div>
+            </div>
+            """
 
         # Alpaca account section
         alpaca_html = ""
@@ -249,6 +309,7 @@ class EmailSender:
                     </div>
                 </div>
 
+                {portfolio_html}
                 {alpaca_html}
                 {buy_html}
                 {sell_html}
@@ -273,27 +334,77 @@ class EmailSender:
         return html
 
 
+    def send_error_notification(self, error_message: str, traceback_str: str = "") -> bool:
+        """Send error notification email.
+
+        Args:
+            error_message: Brief error description
+            traceback_str: Full traceback (optional)
+
+        Returns:
+            True if sent successfully
+        """
+        subject = f"Microsoft Trading Bot - ERROR {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        html_body = self._build_error_html(error_message, traceback_str)
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Microsoft Trading Bot <{self.sender_email}>"
+        msg["To"] = self.receiver_email
+
+        msg.attach(MIMEText(html_body, "html"))
+
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(self.sender_email, self.app_password)
+                server.sendmail(self.sender_email, self.receiver_email, msg.as_string())
+            return True
+        except Exception as e:
+            print(f"Failed to send error email: {e}")
+            return False
+
+    def _build_error_html(self, error_message: str, traceback_str: str = "") -> str:
+        """Build HTML error notification body."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+        </head>
+        <body style="margin: 0; padding: 0; background-color: #0f0f23; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+            <div style="max-width: 800px; margin: 0 auto; padding: 20px;">
+                <div style="background: linear-gradient(135deg, #2e1a1a 0%, #3e1616 100%); border-radius: 15px; padding: 30px; margin-bottom: 20px; border: 1px solid #ff1744;">
+                    <h1 style="color: #ff1744; margin: 0; font-size: 28px;">Microsoft Trading Bot</h1>
+                    <p style="color: #ff8a80; margin: 5px 0 0 0;">ERROR REPORT</p>
+                    <p style="color: #666; margin: 5px 0 0 0; font-size: 12px;">{now}</p>
+                </div>
+
+                <div style="background: #1a1a2e; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #ff1744;">
+                    <h2 style="color: #ff1744; margin-top: 0;">Error Details</h2>
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                        <div style="color: #ff8a80; font-size: 12px; margin-bottom: 5px;">ERROR MESSAGE</div>
+                        <div style="color: #fff; font-size: 16px; font-family: monospace;">{error_message}</div>
+                    </div>
+                    {f"""
+                    <div style="background: #16213e; padding: 15px; border-radius: 8px;">
+                        <div style="color: #ff8a80; font-size: 12px; margin-bottom: 5px;">TRACEBACK</div>
+                        <pre style="color: #aaa; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">{traceback_str}</pre>
+                    </div>
+                    """ if traceback_str else ""}
+                </div>
+
+                <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+                    <p>Microsoft Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+
 if __name__ == "__main__":
     sender = EmailSender()
-    test_results = {
-        "phase1": {"total_scanned": 1000, "candidates_found": 20},
-        "phase2": {"buy": 3, "sell": 1, "hold": 16},
-        "total_elapsed_seconds": 300,
-        "deep_results": [
-            {"ticker": "NVDA", "action": "buy", "conviction": 0.85, "price": 208.65, "reasoning": "Strong technical momentum with RSI oversold bounce"},
-            {"ticker": "AAPL", "action": "buy", "conviction": 0.75, "price": 195.50, "reasoning": "Breaking out of consolidation pattern"},
-            {"ticker": "TSLA", "action": "sell", "conviction": 0.70, "price": 245.30, "reasoning": "Overbought RSI with bearish divergence"},
-        ],
-    }
-    test_alpaca = {
-        "portfolio_value": 10000,
-        "cash": 5000,
-        "buying_power": 10000,
-        "market_open": True,
-        "positions": [
-            {"ticker": "NVDA", "qty": 10, "avg_entry_price": 200.00, "current_price": 208.65, "unrealized_pl": 86.50},
-            {"ticker": "AAPL", "qty": 15, "avg_entry_price": 190.00, "current_price": 195.50, "unrealized_pl": 82.50},
-        ],
-    }
-    sender.send_daily_update(test_results, test_alpaca)
-    print("Test email sent!")
+    sender.send_error_notification("Test error: Failed to connect to Alpaca API", "Traceback: ConnectionTimeout")
+    print("Test error email sent!")
