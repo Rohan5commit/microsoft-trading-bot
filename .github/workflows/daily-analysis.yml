@@ -41,8 +41,9 @@ jobs:
           TRADINGAGENTS_DEEP_THINK_LLM: meta/llama-3.1-70b-instruct
           TRADINGAGENTS_QUICK_THINK_LLM: meta/llama-3.1-8b-instruct
           TRADINGAGENTS_TEMPERATURE: "0.1"
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          python bot/scheduler.py daily
+          cd bot && python scheduler.py daily
 
       - name: Upload results
         if: always()
