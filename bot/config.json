@@ -37,6 +37,6 @@
   },
   "deep_analysis": {
     "count": 20,
-    "min_conviction": 0.6
+    "min_conviction": 0.3
   }
 }
