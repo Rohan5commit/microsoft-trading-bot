@@ -34,5 +34,9 @@
     "end_date": "2025-12-31",
     "initial_capital": 10000,
     "benchmark": "SPY"
+  },
+  "deep_analysis": {
+    "count": 20,
+    "min_conviction": 0.6
   }
 }
