@@ -1,0 +1,38 @@
+{
+  "universe": {
+    "max_stocks": 100,
+    "min_market_cap_billion": 10,
+    "sectors": ["technology", "healthcare", "finance", "consumer", "industrial", "energy"],
+    "exclude": ["SPY", "QQQ", "IWM", "DIA"],
+    "refresh_days": 30
+  },
+  "risk": {
+    "max_position_pct": 10.0,
+    "max_positions": 10,
+    "stop_loss_pct": 5.0,
+    "take_profit_pct": 20.0,
+    "max_daily_loss_pct": 3.0,
+    "min_conviction": 0.6,
+    "position_size_method": "equal_weight"
+  },
+  "trading": {
+    "mode": "paper",
+    "universe_file": "universe.json",
+    "analysis_time": "09:00",
+    "timezone": "US/Eastern",
+    "holding_period_days": 5,
+    "min_volume": 1000000
+  },
+  "llm": {
+    "provider": "nvidia",
+    "deep_think_model": "meta/llama-3.1-70b-instruct",
+    "quick_think_model": "meta/llama-3.1-8b-instruct",
+    "temperature": 0.1
+  },
+  "backtest": {
+    "start_date": "2025-01-01",
+    "end_date": "2025-12-31",
+    "initial_capital": 10000,
+    "benchmark": "SPY"
+  }
+}

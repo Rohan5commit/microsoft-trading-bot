@@ -1,0 +1,18 @@
+# Core dependencies
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# TradingAgents framework
+langchain-core>=0.3.81
+langgraph>=0.4.8
+tradingagents>=0.3.0
+
+# Alpaca trading
+alpaca-py>=0.43.0
+
+# Data
+yfinance>=1.4.1
+
+# CLI
+rich>=14.0.0
+typer>=0.21.0
