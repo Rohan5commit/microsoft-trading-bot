@@ -63,10 +63,13 @@ def check_status():
         status = bot.get_status()
 
         logger.info("Bot Status:")
-        logger.info(f"  Portfolio Value: ${status['portfolio_value']:,.2f}")
-        logger.info(f"  Cash: ${status['cash']:,.2f}")
-        logger.info(f"  Positions: {status['position_count']}")
-        logger.info(f"  Market Open: {status['market_open']}")
+        logger.info(f"  Mode: {status['mode']}")
+        logger.info(f"  Alpaca: {'Connected' if status['alpaca_connected'] else 'Not configured'}")
+
+        if status.get("portfolio_value"):
+            logger.info(f"  Portfolio Value: ${status['portfolio_value']:,.2f}")
+            logger.info(f"  Cash: ${status['cash']:,.2f}")
+            logger.info(f"  Positions: {status['position_count']}")
 
         return status
 

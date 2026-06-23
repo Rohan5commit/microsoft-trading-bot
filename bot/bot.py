@@ -1,6 +1,7 @@
 """Main trading bot orchestrator.
 
 Ties together TradingAgents analysis, Twelve Data, Alpaca execution, and risk management.
+Alpaca is optional - bot runs analysis-only without it.
 """
 
 import json
@@ -23,10 +24,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-from alpaca_client import AlpacaClient
 from risk_manager import RiskManager
 from universe import get_universe
 from twelve_data import TwelveDataClient
+
+# Alpaca is optional
+try:
+    from alpaca_client import AlpacaClient
+    ALPACA_AVAILABLE = True
+except (ImportError, ValueError):
+    ALPACA_AVAILABLE = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,9 +62,19 @@ class TradingBot:
             self.config = json.load(f)
 
         # Initialize components
-        self.alpaca = AlpacaClient(paper=True)
         self.twelve_data = TwelveDataClient()
         self.risk_manager = RiskManager(self.config)
+
+        # Alpaca is optional
+        self.alpaca = None
+        if ALPACA_AVAILABLE and os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"):
+            try:
+                self.alpaca = AlpacaClient(paper=True)
+                logger.info("Alpaca connected (paper trading)")
+            except Exception as e:
+                logger.warning(f"Alpaca not available: {e}")
+        else:
+            logger.info("Running in analysis-only mode (no Alpaca keys)")
 
         # TradingAgents config
         self.ta_config = DEFAULT_CONFIG.copy()
@@ -69,18 +86,21 @@ class TradingBot:
         # Initialize TradingAgents
         self.ta = TradingAgentsGraph(debug=False, config=self.ta_config)
 
-        logger.info("Trading bot initialized (Twelve Data + NVIDIA NIM + Alpaca)")
+        mode = "analysis + trading" if self.alpaca else "analysis-only"
+        logger.info(f"Trading bot initialized ({mode}) - Twelve Data + NVIDIA NIM")
 
     def get_price(self, ticker: str) -> float:
         """Get current stock price from Twelve Data (primary) or Alpaca (fallback)."""
         try:
             return self.twelve_data.get_price(ticker)
         except Exception:
-            try:
-                return self.alpaca.get_stock_price(ticker)
-            except Exception as e:
-                logger.error(f"Failed to get price for {ticker}: {e}")
-                return 0
+            if self.alpaca:
+                try:
+                    return self.alpaca.get_stock_price(ticker)
+                except Exception:
+                    pass
+            logger.error(f"Failed to get price for {ticker}")
+            return 0
 
     def get_technical_indicators(self, ticker: str) -> dict:
         """Get technical indicators from Twelve Data."""
@@ -116,6 +136,8 @@ class TradingBot:
         logger.info(f"Running analysis for {ticker} on {date}")
 
         # Get current market data from Twelve Data
+        price = 0
+        indicators = {}
         try:
             price = self.get_price(ticker)
             indicators = self.get_technical_indicators(ticker)
@@ -150,15 +172,7 @@ class TradingBot:
             }
 
     def _parse_decision(self, decision: str, state: dict) -> dict:
-        """Parse TradingAgents decision into structured format.
-
-        Args:
-            decision: Raw decision string from TradingAgents
-            state: Full state dict
-
-        Returns:
-            Parsed decision dict
-        """
+        """Parse TradingAgents decision into structured format."""
         decision_lower = decision.lower() if decision else ""
 
         # Determine action
@@ -180,16 +194,12 @@ class TradingBot:
         }
 
     def _extract_conviction(self, decision: str) -> float:
-        """Extract conviction score from decision text.
-
-        Looks for keywords and maps to 0-1 score.
-        """
+        """Extract conviction score from decision text."""
         if not decision:
             return 0.5
 
         decision_lower = decision.lower()
 
-        # Strong signals
         if any(w in decision_lower for w in ["strong buy", "strongly recommend buy"]):
             return 0.9
         if any(w in decision_lower for w in ["strong sell", "strongly recommend sell"]):
@@ -198,101 +208,76 @@ class TradingBot:
             return 0.8
         if "sell" in decision_lower and "underweight" in decision_lower:
             return 0.8
-
-        # Moderate signals
         if "buy" in decision_lower:
             return 0.7
         if "sell" in decision_lower:
             return 0.7
-
-        # Weak signals
         if "hold" in decision_lower or "neutral" in decision_lower:
             return 0.5
 
         return 0.5
 
     def execute_decision(self, decision: dict) -> dict:
-        """Execute a trading decision.
+        """Execute a trading decision (requires Alpaca)."""
+        if not self.alpaca:
+            return {"executed": False, "reason": "Alpaca not configured - analysis only"}
 
-        Args:
-            decision: Parsed decision dict
-
-        Returns:
-            Execution result
-        """
         ticker = decision["ticker"]
         action = decision["action"]
         conviction = decision["conviction"]
 
         logger.info(f"Executing decision for {ticker}: {action}")
 
-        # Get current state
         account = self.alpaca.get_account()
         portfolio_value = account["portfolio_value"]
         positions = self.alpaca.get_positions()
 
-        # Check risk
         risk_check = self.risk_manager.should_open_position(
             ticker, conviction, portfolio_value, positions
         )
 
         if action == "buy":
             if not risk_check["should_open"]:
-                logger.info(f"Risk check failed for {ticker}: {risk_check['reasoning']}")
                 return {"executed": False, "reason": risk_check["reasoning"]}
 
-            # Get stock price from Twelve Data
             price = self.get_price(ticker)
-
-            # Calculate position size
             sizing = self.risk_manager.calculate_position_size(
                 ticker, price, conviction, portfolio_value, positions
             )
 
             if sizing["action"] != "buy" or sizing["qty"] <= 0:
-                logger.info(f"Position sizing skipped for {ticker}: {sizing['reasoning']}")
                 return {"executed": False, "reason": sizing["reasoning"]}
 
-            # Execute buy
             try:
                 order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
-                self.risk_manager.record_trade(
-                    ticker, "buy", sizing["qty"], price, decision["reasoning"]
-                )
-                logger.info(f"Bought {sizing['qty']} shares of {ticker} @ ${price:.2f}")
+                self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, decision["reasoning"])
                 return {"executed": True, "order": order, "sizing": sizing}
             except Exception as e:
-                logger.error(f"Buy order failed for {ticker}: {e}")
                 return {"executed": False, "reason": str(e)}
 
         elif action == "sell":
-            # Check if we have a position to sell
             position = self.alpaca.get_position(ticker)
             if not position:
-                logger.info(f"No position to sell for {ticker}")
                 return {"executed": False, "reason": "No position to sell"}
 
-            # Execute sell
             try:
                 order = self.alpaca.market_sell(ticker, qty=int(position["qty"]))
                 price = self.get_price(ticker)
                 pnl = (price - position["avg_entry_price"]) * position["qty"]
                 self.risk_manager.update_daily_pnl(pnl)
-                self.risk_manager.record_trade(
-                    ticker, "sell", int(position["qty"]), price, decision["reasoning"]
-                )
-                logger.info(f"Sold {int(position['qty'])} shares of {ticker} @ ${price:.2f} (P&L: ${pnl:.2f})")
+                self.risk_manager.record_trade(ticker, "sell", int(position["qty"]), price, decision["reasoning"])
                 return {"executed": True, "order": order, "pnl": pnl}
             except Exception as e:
-                logger.error(f"Sell order failed for {ticker}: {e}")
                 return {"executed": False, "reason": str(e)}
 
-        else:  # hold
-            logger.info(f"Holding {ticker} - no action needed")
-            return {"executed": False, "reason": "Hold decision - no action"}
+        else:
+            return {"executed": False, "reason": "Hold - no action"}
 
     def check_stop_losses(self) -> list[dict]:
-        """Check all positions for stop-losses and take-profits."""
+        """Check all positions for stop-losses (requires Alpaca)."""
+        if not self.alpaca:
+            return []
+
         positions = self.alpaca.get_positions()
         results = []
 
@@ -301,22 +286,18 @@ class TradingBot:
             entry_price = pos["avg_entry_price"]
             current_price = self.get_price(ticker)
 
-            # Check stop-loss
             stop_check = self.risk_manager.check_stop_loss(ticker, entry_price, current_price)
             if stop_check["should_stop"]:
-                logger.warning(f"Stop-loss triggered for {ticker}: {stop_check['reasoning']}")
-                order = self.alpaca.close_position(ticker)
+                self.alpaca.close_position(ticker)
                 pnl = (current_price - entry_price) * pos["qty"]
                 self.risk_manager.update_daily_pnl(pnl)
                 self.risk_manager.record_trade(ticker, "sell", int(pos["qty"]), current_price, "stop-loss")
                 results.append({"ticker": ticker, "action": "stop-loss", "pnl": pnl})
                 continue
 
-            # Check take-profit
             tp_check = self.risk_manager.check_take_profit(ticker, entry_price, current_price)
             if tp_check["should_take_profit"]:
-                logger.info(f"Take-profit triggered for {ticker}: {tp_check['reasoning']}")
-                order = self.alpaca.close_position(ticker)
+                self.alpaca.close_position(ticker)
                 pnl = (current_price - entry_price) * pos["qty"]
                 self.risk_manager.update_daily_pnl(pnl)
                 self.risk_manager.record_trade(ticker, "sell", int(pos["qty"]), current_price, "take-profit")
@@ -325,19 +306,12 @@ class TradingBot:
         return results
 
     def run_daily(self, tickers: Optional[list[str]] = None) -> dict:
-        """Run the daily trading cycle.
-
-        Args:
-            tickers: List of tickers to analyze (default: from universe config)
-
-        Returns:
-            Summary of actions taken
-        """
+        """Run the daily trading cycle."""
         logger.info("=" * 60)
         logger.info("Starting daily trading cycle")
 
-        # Check if market is open
-        if not self.alpaca.is_market_open():
+        # Check if market is open (skip check if no Alpaca)
+        if self.alpaca and not self.alpaca.is_market_open():
             logger.info("Market is closed. Skipping.")
             return {"status": "market_closed"}
 
@@ -347,12 +321,13 @@ class TradingBot:
 
         logger.info(f"Analyzing {len(tickers)} tickers")
 
-        # Check stop-losses first
-        stop_results = self.check_stop_losses()
-        if stop_results:
-            logger.info(f"Stop-loss/take-profit actions: {len(stop_results)}")
+        # Check stop-losses first (only if Alpaca available)
+        if self.alpaca:
+            stop_results = self.check_stop_losses()
+            if stop_results:
+                logger.info(f"Stop-loss/take-profit actions: {len(stop_results)}")
 
-        # Run analysis and execute
+        # Run analysis
         results = {
             "analyzed": 0,
             "bought": 0,
@@ -360,32 +335,33 @@ class TradingBot:
             "held": 0,
             "errors": 0,
             "decisions": [],
+            "mode": "analysis-only" if not self.alpaca else "trading",
         }
 
         for ticker in tickers:
             try:
-                # Check if we're still within daily loss limit
-                account = self.alpaca.get_account()
-                positions = self.alpaca.get_positions()
-
                 # Run analysis
                 decision = self.run_analysis(ticker)
                 results["analyzed"] += 1
 
-                # Execute
-                execution = self.execute_decision(decision)
-                decision["execution"] = execution
-                results["decisions"].append(decision)
+                # Execute only if Alpaca is available
+                if self.alpaca:
+                    execution = self.execute_decision(decision)
+                    decision["execution"] = execution
 
-                if execution.get("executed"):
-                    if decision["action"] == "buy":
-                        results["bought"] += 1
-                    elif decision["action"] == "sell":
-                        results["sold"] += 1
+                    if execution.get("executed"):
+                        if decision["action"] == "buy":
+                            results["bought"] += 1
+                        elif decision["action"] == "sell":
+                            results["sold"] += 1
+                    else:
+                        results["held"] += 1
                 else:
                     results["held"] += 1
 
-                # Rate limit - don't hammer the APIs
+                results["decisions"].append(decision)
+
+                # Rate limit
                 time.sleep(2)
 
             except Exception as e:
@@ -393,14 +369,15 @@ class TradingBot:
                 results["errors"] += 1
 
         # Summary
-        account = self.alpaca.get_account()
-        results["portfolio_value"] = account["portfolio_value"]
-        results["positions"] = len(self.alpaca.get_positions())
-
         logger.info(f"Daily cycle complete: {results['analyzed']} analyzed, "
                      f"{results['bought']} bought, {results['sold']} sold, "
                      f"{results['held']} held, {results['errors']} errors")
-        logger.info(f"Portfolio value: ${account['portfolio_value']:,.2f}")
+
+        if self.alpaca:
+            account = self.alpaca.get_account()
+            results["portfolio_value"] = account["portfolio_value"]
+            results["positions"] = len(self.alpaca.get_positions())
+            logger.info(f"Portfolio value: ${account['portfolio_value']:,.2f}")
 
         # Save results
         results_path = Path(__file__).parent / "results" / f"{datetime.now().strftime('%Y%m%d')}.json"
@@ -412,18 +389,25 @@ class TradingBot:
 
     def get_status(self) -> dict:
         """Get current bot status."""
-        account = self.alpaca.get_account()
-        positions = self.alpaca.get_positions()
-
-        return {
-            "portfolio_value": account["portfolio_value"],
-            "cash": account["cash"],
-            "buying_power": account["buying_power"],
-            "position_count": len(positions),
-            "positions": positions,
-            "market_open": self.alpaca.is_market_open(),
-            "market_clock": self.alpaca.get_market_clock(),
+        status = {
+            "mode": "analysis-only" if not self.alpaca else "trading",
+            "alpaca_connected": self.alpaca is not None,
         }
+
+        if self.alpaca:
+            account = self.alpaca.get_account()
+            positions = self.alpaca.get_positions()
+            status.update({
+                "portfolio_value": account["portfolio_value"],
+                "cash": account["cash"],
+                "buying_power": account["buying_power"],
+                "position_count": len(positions),
+                "positions": positions,
+                "market_open": self.alpaca.is_market_open(),
+                "market_clock": self.alpaca.get_market_clock(),
+            })
+
+        return status
 
 
 def main():
