@@ -7,13 +7,14 @@ on:
   workflow_dispatch:  # Allow manual trigger
     inputs:
       tickers:
-        description: 'Comma-separated tickers (leave empty for full universe)'
+        description: 'Comma-separated tickers (leave empty for top 5 universe)'
         required: false
         default: ''
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 60  # 1 hour max per run
     
     steps:
       - name: Checkout repository
@@ -43,7 +44,14 @@ jobs:
           TRADINGAGENTS_TEMPERATURE: "0.1"
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          cd bot && python scheduler.py daily
+          cd bot
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            # Parse comma-separated tickers into space-separated for --tickers
+            TICKERS=$(echo "${{ github.event.inputs.tickers }}" | tr ',' ' ')
+            python bot.py --daily --tickers $TICKERS
+          else
+            python scheduler.py daily
+          fi
 
       - name: Upload results
         if: always()

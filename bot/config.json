@@ -1,7 +1,7 @@
 {
   "universe": {
-    "max_stocks": 100,
-    "min_market_cap_billion": 10,
+    "max_stocks": 5,
+    "min_market_cap_billion": 100,
     "sectors": ["technology", "healthcare", "finance", "consumer", "industrial", "energy"],
     "exclude": ["SPY", "QQQ", "IWM", "DIA"],
     "refresh_days": 30
