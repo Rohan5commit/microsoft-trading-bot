@@ -46,6 +46,9 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           ALPACA_BASE_URL: https://paper-api.alpaca.markets
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TRADINGAGENTS_LLM_PROVIDER: nvidia
           TRADINGAGENTS_DEEP_THINK_LLM: meta/llama-3.1-70b-instruct
           TRADINGAGENTS_QUICK_THINK_LLM: meta/llama-3.1-8b-instruct

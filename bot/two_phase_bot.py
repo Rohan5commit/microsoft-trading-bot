@@ -35,6 +35,12 @@ try:
 except (ImportError, ValueError):
     ALPACA_AVAILABLE = False
 
+try:
+    from email_sender import EmailSender
+    EMAIL_AVAILABLE = True
+except (ImportError, ValueError):
+    EMAIL_AVAILABLE = False
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -68,6 +74,14 @@ class TwoPhaseBot:
             except Exception:
                 pass
 
+        # Email sender optional
+        self.email_sender = None
+        if EMAIL_AVAILABLE and os.getenv("GMAIL_APP_PASSWORD"):
+            try:
+                self.email_sender = EmailSender()
+            except Exception:
+                pass
+
         # TradingAgents config for deep analysis
         self.ta_config = DEFAULT_CONFIG.copy()
         self.ta_config["llm_provider"] = self.config["llm"]["provider"]
@@ -80,6 +94,43 @@ class TwoPhaseBot:
         self.min_conviction = self.config.get("deep_analysis", {}).get("min_conviction", 0.6)
 
         logger.info(f"Two-phase bot initialized (deep_count={self.deep_count})")
+
+    def get_alpaca_status(self) -> Optional[dict]:
+        """Get Alpaca account status with positions."""
+        if not self.alpaca:
+            return None
+
+        try:
+            account = self.alpaca.get_account()
+            positions = self.alpaca.get_positions()
+
+            return {
+                "portfolio_value": account["portfolio_value"],
+                "cash": account["cash"],
+                "buying_power": account["buying_power"],
+                "market_open": self.alpaca.is_market_open(),
+                "positions": positions,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get Alpaca status: {e}")
+            return None
+
+    def send_email(self, results: dict, alpaca_status: Optional[dict] = None) -> bool:
+        """Send daily update email."""
+        if not self.email_sender:
+            logger.info("Email sender not configured, skipping email")
+            return False
+
+        try:
+            success = self.email_sender.send_daily_update(results, alpaca_status)
+            if success:
+                logger.info("Daily update email sent successfully")
+            else:
+                logger.error("Failed to send daily update email")
+            return success
+        except Exception as e:
+            logger.error(f"Email error: {e}")
+            return False
 
     def batch_get_prices(self, tickers: list[str]) -> dict[str, float]:
         """Fetch prices for multiple tickers concurrently."""
@@ -295,6 +346,9 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         # Phase 2: Deep analysis
         deep_results = await self.phase2_deep(candidates)
 
+        # Get Alpaca account status
+        alpaca_status = self.get_alpaca_status()
+
         # Compile final results
         total_elapsed = time.time() - total_start
 
@@ -317,7 +371,11 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             "total_elapsed_seconds": round(total_elapsed, 1),
             "deep_results": deep_results,
             "candidates": candidates,
+            "alpaca_status": alpaca_status,
         }
+
+        # Send email with results and Alpaca status
+        self.send_email(summary, alpaca_status)
 
         logger.info("=" * 60)
         logger.info(f"TWO-PHASE ANALYSIS COMPLETE")
