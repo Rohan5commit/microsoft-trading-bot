@@ -157,6 +157,30 @@ class EmailSender:
                 </tr>
                 """
 
+            market_color = "#00c853" if market_open else "#ff1744"
+            market_status = "OPEN" if market_open else "CLOSED"
+
+            positions_header = '<h3 style="color: #fff; margin-top: 20px;">Open Positions</h3>' if positions else ""
+            if positions:
+                positions_table = f"""
+                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                    <thead>
+                        <tr style="background: #16213e;">
+                            <th style="padding: 10px; text-align: left; color: #888;">Ticker</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Qty</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Entry</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Current</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {positions_html}
+                    </tbody>
+                </table>
+                """
+            else:
+                positions_table = ""
+
             alpaca_html = f"""
             <div style="background: #1a1a2e; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #333;">
                 <h2 style="color: #00d4ff; margin-top: 0;">Alpaca Account Status</h2>
@@ -175,26 +199,11 @@ class EmailSender:
                     </div>
                     <div style="background: #16213e; padding: 15px; border-radius: 8px; flex: 1; min-width: 150px;">
                         <div style="color: #888; font-size: 12px;">Market</div>
-                        <div style="color: {'#00c853' if market_open else '#ff1744'}; font-size: 24px; font-weight: bold;">{'OPEN' if market_open else 'CLOSED'}</div>
+                        <div style="color: {market_color}; font-size: 24px; font-weight: bold;">{market_status}</div>
                     </div>
                 </div>
-                {"<h3 style="color: #fff; margin-top: 20px;">Open Positions</h3>" if positions else ""}
-                {f'''
-                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
-                    <thead>
-                        <tr style="background: #16213e;">
-                            <th style="padding: 10px; text-align: left; color: #888;">Ticker</th>
-                            <th style="padding: 10px; text-align: left; color: #888;">Qty</th>
-                            <th style="padding: 10px; text-align: left; color: #888;">Entry</th>
-                            <th style="padding: 10px; text-align: left; color: #888;">Current</th>
-                            <th style="padding: 10px; text-align: left; color: #888;">P&L</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {positions_html}
-                    </tbody>
-                </table>
-                ''' if positions else ""}
+                {positions_header}
+                {positions_table}
             </div>
             """
 
