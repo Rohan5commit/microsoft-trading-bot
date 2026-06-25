@@ -114,10 +114,33 @@ jobs:
           msg['To'] = receiver
           msg.attach(MIMEText(html, 'html'))
 
-          with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-              server.login(sender, password)
-              server.sendmail(sender, receiver, msg.as_string())
-          print('Error notification sent')
+          try:
+              with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                  server.ehlo()
+                  print('SMTP connected')
+                  server.login(sender, password)
+                  print('SMTP login successful')
+                  code, resp = server.noop()
+                  print(f'SMTP noop: code={code} resp={resp}')
+                  if code != 250:
+                      print(f'ERROR: SMTP session invalid: {code} {resp}')
+                      exit(1)
+                  rejects = server.sendmail(sender, receiver, msg.as_string())
+                  if rejects:
+                      print(f'ERROR: Email rejected: {rejects}')
+                      exit(1)
+                  code, resp = server.noop()
+                  print(f'SMTP noop after send: code={code} resp={resp}')
+              print('Error notification sent successfully')
+          except smtplib.SMTPAuthenticationError as e:
+              print(f'ERROR: SMTP auth failed (bad credentials?): {e}')
+              exit(1)
+          except smtplib.SMTPException as e:
+              print(f'ERROR: SMTP error: {e}')
+              exit(1)
+          except Exception as e:
+              print(f'ERROR: {e}')
+              exit(1)
           "
 
       - name: Upload results

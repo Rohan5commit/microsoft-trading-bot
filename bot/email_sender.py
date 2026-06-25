@@ -3,12 +3,15 @@
 Uses Gmail SMTP with App Password authentication.
 """
 
+import logging
 import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class EmailSender:
@@ -52,11 +55,36 @@ class EmailSender:
 
         try:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.ehlo()
+                logger.info("SMTP connected to smtp.gmail.com:465")
+
                 server.login(self.sender_email, self.app_password)
-                server.sendmail(self.sender_email, self.receiver_email, msg.as_string())
+                logger.info("SMTP login successful")
+
+                code, response = server.noop()
+                logger.info(f"SMTP noop after login: code={code} response={response}")
+                if code != 250:
+                    logger.error(f"SMTP session invalid after login: {code} {response}")
+                    return False
+
+                rejects = server.sendmail(self.sender_email, self.receiver_email, msg.as_string())
+                if rejects:
+                    logger.error(f"Email rejected by Gmail: {rejects}")
+                    return False
+
+                code, response = server.noop()
+                logger.info(f"SMTP noop after send: code={code} response={response}")
+
+            logger.info(f"Email sent successfully to {self.receiver_email}")
             return True
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"SMTP authentication failed (bad credentials?): {e}")
+            return False
+        except smtplib.SMTPException as e:
+            logger.error(f"SMTP error: {e}")
+            return False
         except Exception as e:
-            print(f"Failed to send email: {e}")
+            logger.error(f"Failed to send email: {e}")
             return False
 
     def _build_html(self, results: dict, alpaca_status: Optional[dict] = None) -> str:
@@ -365,11 +393,36 @@ class EmailSender:
 
         try:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.ehlo()
+                logger.info("SMTP connected to smtp.gmail.com:465 (error notification)")
+
                 server.login(self.sender_email, self.app_password)
-                server.sendmail(self.sender_email, self.receiver_email, msg.as_string())
+                logger.info("SMTP login successful (error notification)")
+
+                code, response = server.noop()
+                logger.info(f"SMTP noop after login: code={code} response={response}")
+                if code != 250:
+                    logger.error(f"SMTP session invalid after login: {code} {response}")
+                    return False
+
+                rejects = server.sendmail(self.sender_email, self.receiver_email, msg.as_string())
+                if rejects:
+                    logger.error(f"Error email rejected by Gmail: {rejects}")
+                    return False
+
+                code, response = server.noop()
+                logger.info(f"SMTP noop after send: code={code} response={response}")
+
+            logger.info(f"Error email sent successfully to {self.receiver_email}")
             return True
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"SMTP authentication failed (bad credentials?): {e}")
+            return False
+        except smtplib.SMTPException as e:
+            logger.error(f"SMTP error: {e}")
+            return False
         except Exception as e:
-            print(f"Failed to send error email: {e}")
+            logger.error(f"Failed to send error email: {e}")
             return False
 
     def _build_error_html(self, error_message: str, traceback_str: str = "") -> str:
