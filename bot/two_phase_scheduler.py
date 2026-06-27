@@ -15,15 +15,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from two_phase_bot import TwoPhaseBot
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(Path(__file__).parent / "scheduler.log"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger(__name__)
+# Use named logger - basicConfig already called by two_phase_bot import
+logger = logging.getLogger("scheduler")
+_handler = logging.FileHandler(Path(__file__).parent / "scheduler.log")
+_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
 
 
 def run_two_phase(tickers=None, deep_count=20, concurrent=20):
