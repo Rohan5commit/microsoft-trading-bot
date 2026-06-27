@@ -298,11 +298,14 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         return candidates
 
     def _extract_conviction_and_allocation(self, decision: str, action: str) -> tuple[float, Optional[float]]:
-        """Extract conviction and optional allocation % from model decision text.
+        """Extract conviction and allocation % from model decision text.
 
-        The model may output phrases like:
+        Model MUST specify allocation. If not found, returns None and trade is skipped.
+
+        Looks for patterns like:
         - "conviction: 0.8" or "confidence: 75%"
-        - "allocate 5%" or "position size: 3%"
+        - "allocation: 5%" or "allocate 5%" or "position size: 3%"
+        - "sizing: 2% of portfolio"
 
         Returns (conviction, allocation_pct or None)
         """
@@ -314,7 +317,7 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         if conv_match:
             val = float(conv_match.group(1))
             if val > 1.0:
-                val = val / 100.0  # treat as percentage
+                val = val / 100.0
             conviction = min(1.0, max(0.0, val))
         else:
             conf_match = re.search(r'confidence[:\s]+(\d+\.?\d*)', decision, re.IGNORECASE)
@@ -324,7 +327,6 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                     val = val / 100.0
                 conviction = min(1.0, max(0.0, val))
             else:
-                # Look for strong/weak modifiers
                 lower = decision.lower()
                 if any(w in lower for w in ["strong buy", "strong buy signal", "high conviction"]):
                     conviction = 0.9
@@ -339,14 +341,31 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                 elif any(w in lower for w in ["weak sell", "slight sell"]):
                     conviction = 0.55
 
-        # Try to extract allocation
+        # Extract allocation - model MUST provide this
+        # Pattern 1: "allocation: 5%" or "allocation 5%"
         alloc_match = re.search(r'allocat[e|ion]+[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
         if alloc_match:
             allocation = float(alloc_match.group(1))
         else:
-            pos_match = re.search(r'position\s+size[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
+            # Pattern 2: "position size: 3%" or "position: 3%"
+            pos_match = re.search(r'position\s*(?:size)?[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
             if pos_match:
                 allocation = float(pos_match.group(1))
+            else:
+                # Pattern 3: "sizing: 2% of portfolio"
+                sizing_match = re.search(r'sizing[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
+                if sizing_match:
+                    allocation = float(sizing_match.group(1))
+                else:
+                    # Pattern 4: "recommend X% portfolio" or "X% of portfolio"
+                    portfolio_match = re.search(r'(\d+\.?\d*)\s*%\s*(?:of\s+)?(?:portfolio|capital|equity)', decision, re.IGNORECASE)
+                    if portfolio_match:
+                        allocation = float(portfolio_match.group(1))
+                    else:
+                        # Pattern 5: "put/invest X%" or "stake of X%"
+                        stake_match = re.search(r'(?:put|invest|stake|size)[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
+                        if stake_match:
+                            allocation = float(stake_match.group(1))
 
         return conviction, allocation
 
