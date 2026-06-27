@@ -81,7 +81,7 @@ class AlpacaClient:
                 "current_price": float(p.current_price),
                 "unrealized_pl": float(p.unrealized_pl),
                 "unrealized_plpc": float(p.unrealized_plpc),
-                "side": p.side,
+                "side": "long" if str(p.side).lower() == "buy" else "short",
             }
             for p in positions
         ]
@@ -98,7 +98,7 @@ class AlpacaClient:
                 "current_price": float(p.current_price),
                 "unrealized_pl": float(p.unrealized_pl),
                 "unrealized_plpc": float(p.unrealized_plpc),
-                "side": p.side,
+                "side": "long" if str(p.side).lower() == "buy" else "short",
             }
         except Exception:
             return None
