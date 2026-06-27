@@ -23,8 +23,14 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.graph.trading_graph import TradingAgentsGraph
+try:
+    from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+    TRADINGAGENTS_AVAILABLE = True
+except ImportError:
+    TRADINGAGENTS_AVAILABLE = False
+    DEFAULT_CONFIG = {}
+    TradingAgentsGraph = None
 
 from risk_manager import RiskManager
 from universe import get_universe
@@ -103,11 +109,15 @@ class TwoPhaseBot:
                 pass
 
         # TradingAgents config for deep analysis
-        self.ta_config = DEFAULT_CONFIG.copy()
-        self.ta_config["llm_provider"] = self.config["llm"]["provider"]
-        self.ta_config["deep_think_llm"] = self.config["llm"]["deep_think_model"]
-        self.ta_config["quick_think_llm"] = self.config["llm"]["quick_think_model"]
-        self.ta_config["temperature"] = self.config["llm"]["temperature"]
+        if TRADINGAGENTS_AVAILABLE:
+            self.ta_config = DEFAULT_CONFIG.copy()
+            self.ta_config["llm_provider"] = self.config["llm"]["provider"]
+            self.ta_config["deep_think_llm"] = self.config["llm"]["deep_think_model"]
+            self.ta_config["quick_think_llm"] = self.config["llm"]["quick_think_model"]
+            self.ta_config["temperature"] = self.config["llm"]["temperature"]
+        else:
+            self.ta_config = {}
+            logger.warning("TradingAgents not available - deep analysis disabled")
 
         # Deep analysis settings
         self.deep_count = self.config.get("deep_analysis", {}).get("count", 20)
@@ -495,6 +505,16 @@ Do NOT include any other text. Only the two lines above."""
 
     def deep_analysis(self, ticker: str, date: str) -> dict:
         """Phase 2: Full TradingAgents multi-agent analysis + forced allocation."""
+        if not TRADINGAGENTS_AVAILABLE or TradingAgentsGraph is None:
+            return {
+                "ticker": ticker,
+                "action": "hold",
+                "conviction": 0,
+                "suggested_allocation_pct": None,
+                "reasoning": "TradingAgents not installed - deep analysis skipped",
+                "mode": "deep",
+            }
+
         try:
             ta = TradingAgentsGraph(debug=False, config=self.ta_config.copy())
             state, decision = ta.propagate(ticker, date)
@@ -718,6 +738,17 @@ Do NOT include any other text. Only the two lines above."""
                 logger.error(f"Execution error for {ticker}: {e}")
 
             execution_results.append(result)
+
+            # Re-fetch state after a filled trade to prevent stale data
+            if result["status"] == "filled":
+                try:
+                    account = self.alpaca.get_account()
+                    portfolio_value = account["portfolio_value"]
+                    current_positions = self.alpaca.get_positions()
+                    pos_by_ticker = {p["ticker"]: p for p in current_positions}
+                    logger.info(f"State refreshed: portfolio=${portfolio_value:,.2f}, positions={len(current_positions)}")
+                except Exception as e:
+                    logger.warning(f"Failed to refresh state: {e}")
 
         # Summary
         filled = [r for r in execution_results if r["status"] == "filled"]
