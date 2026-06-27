@@ -6,15 +6,6 @@
     "exclude": ["SPY", "QQQ", "IWM", "DIA"],
     "refresh_days": 30
   },
-  "risk": {
-    "max_position_pct": 10.0,
-    "max_positions": 10,
-    "stop_loss_pct": 5.0,
-    "take_profit_pct": 20.0,
-    "max_daily_loss_pct": 3.0,
-    "min_conviction": 0.6,
-    "position_size_method": "equal_weight"
-  },
   "trading": {
     "mode": "paper",
     "universe_file": "universe.json",
@@ -29,12 +20,6 @@
     "quick_think_model": "meta/llama-3.1-8b-instruct",
     "temperature": 0.1
   },
-  "backtest": {
-    "start_date": "2025-01-01",
-    "end_date": "2025-12-31",
-    "initial_capital": 10000,
-    "benchmark": "SPY"
-  },
   "deep_analysis": {
     "count": 20,
     "min_conviction": 0.3
@@ -43,5 +28,13 @@
     "initial_capital": 100000.0,
     "leverage": 2.0,
     "previous_return_pct": 0.0
+  },
+  "execution": {
+    "enabled": true,
+    "mode": "market"
+  },
+  "risk": {
+    "circuit_breaker_daily_loss_pct": 10.0,
+    "min_conviction": 0.3
   }
 }
