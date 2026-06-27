@@ -110,8 +110,9 @@ jobs:
 
           msg = MIMEMultipart('alternative')
           msg['Subject'] = subject
-          msg['From'] = f'Microsoft Trading Bot <{sender}>'
+          msg['From'] = sender
           msg['To'] = receiver
+          msg['Reply-To'] = sender
           msg.attach(MIMEText(html, 'html'))
 
           try:

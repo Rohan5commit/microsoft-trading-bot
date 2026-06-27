@@ -48,8 +48,9 @@ class EmailSender:
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = f"Microsoft Trading Bot <{self.sender_email}>"
+        msg["From"] = self.sender_email
         msg["To"] = self.receiver_email
+        msg["Reply-To"] = self.sender_email
 
         msg.attach(MIMEText(html_body, "html"))
 
@@ -386,8 +387,9 @@ class EmailSender:
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = f"Microsoft Trading Bot <{self.sender_email}>"
+        msg["From"] = self.sender_email
         msg["To"] = self.receiver_email
+        msg["Reply-To"] = self.sender_email
 
         msg.attach(MIMEText(html_body, "html"))
 
