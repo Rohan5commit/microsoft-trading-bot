@@ -1,34 +1,23 @@
-"""Risk management - position sizing, stop-losses, and portfolio limits."""
+"""Risk management - minimal circuit breaker. Model decides everything."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 
 class RiskManager:
-    """Manages portfolio risk, position sizing, and stop-losses."""
+    """Minimal risk manager. Only circuit breaker. Model drives all decisions."""
 
     def __init__(self, config: dict):
-        """Initialize risk manager.
-
-        Args:
-            config: Bot configuration dict
-        """
         risk_cfg = config.get("risk", {})
-        self.max_position_pct = risk_cfg.get("max_position_pct", 10.0)
-        self.max_positions = risk_cfg.get("max_positions", 10)
-        self.stop_loss_pct = risk_cfg.get("stop_loss_pct", 5.0)
-        self.take_profit_pct = risk_cfg.get("take_profit_pct", 20.0)
-        self.max_daily_loss_pct = risk_cfg.get("max_daily_loss_pct", 3.0)
-        self.min_conviction = risk_cfg.get("min_conviction", 0.6)
-        self.position_size_method = risk_cfg.get("position_size_method", "equal_weight")
+        self.circuit_breaker_daily_loss_pct = risk_cfg.get("circuit_breaker_daily_loss_pct", 10.0)
+        self.min_conviction = risk_cfg.get("min_conviction", 0.3)
 
         self.trades_file = Path(__file__).parent / "trades.json"
         self._load_trades()
 
     def _load_trades(self):
-        """Load trade history from file."""
         if self.trades_file.exists():
             with open(self.trades_file) as f:
                 self.trades = json.load(f)
@@ -36,9 +25,23 @@ class RiskManager:
             self.trades = {"positions": {}, "closed": [], "daily_pnl": {}}
 
     def _save_trades(self):
-        """Save trade history to file."""
         with open(self.trades_file, "w") as f:
             json.dump(self.trades, f, indent=2, default=str)
+
+    def check_circuit_breaker(self, portfolio_value: float) -> dict:
+        """Check if daily loss circuit breaker is tripped. That's it."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        daily_loss = self.trades.get("daily_pnl", {}).get(today, 0)
+
+        if daily_loss < 0:
+            loss_pct = abs(daily_loss) / portfolio_value * 100
+            if loss_pct >= self.circuit_breaker_daily_loss_pct:
+                return {
+                    "tripped": True,
+                    "reasoning": f"Circuit breaker: {loss_pct:.1f}% daily loss >= {self.circuit_breaker_daily_loss_pct}% threshold",
+                }
+
+        return {"tripped": False, "reasoning": "Circuit breaker clear"}
 
     def calculate_position_size(
         self,
@@ -47,77 +50,64 @@ class RiskManager:
         conviction: float,
         portfolio_value: float,
         current_positions: list[dict],
+        suggested_allocation_pct: Optional[float] = None,
     ) -> dict:
-        """Calculate position size based on risk parameters.
+        """Model-driven position sizing.
+
+        The model provides conviction and suggested allocation %.
+        We only enforce buying power limits and circuit breaker.
 
         Args:
             ticker: Stock symbol
-            price: Current stock price
-            conviction: Agent conviction score (0-1)
+            price: Current price
+            conviction: Model conviction (0-1)
             portfolio_value: Total portfolio value
             current_positions: List of current positions
+            suggested_allocation_pct: Model's suggested % of portfolio (0-100).
+                If None, derives from conviction (conviction * 10% of portfolio).
 
         Returns:
-            Dict with qty, notional, and reasoning
+            Dict with qty, notional, action, reasoning
         """
-        # Check if we already have a position in this ticker
-        for pos in current_positions:
-            if pos["ticker"] == ticker:
-                return {
-                    "qty": 0,
-                    "notional": 0,
-                    "action": "hold",
-                    "reasoning": f"Already holding {ticker}",
-                }
-
-        # Check max positions
-        if len(current_positions) >= self.max_positions:
+        # Circuit breaker check
+        cb = self.check_circuit_breaker(portfolio_value)
+        if cb["tripped"]:
             return {
                 "qty": 0,
                 "notional": 0,
                 "action": "skip",
-                "reasoning": f"Max positions ({self.max_positions}) reached",
+                "reasoning": cb["reasoning"],
             }
 
-        # Check conviction threshold
+        # Conviction threshold
         if conviction < self.min_conviction:
             return {
                 "qty": 0,
                 "notional": 0,
                 "action": "skip",
-                "reasoning": f"Conviction {conviction:.2f} below threshold {self.min_conviction}",
+                "reasoning": f"Conviction {conviction:.2f} below minimum {self.min_conviction}",
             }
 
-        # Calculate max position value
-        max_position_value = portfolio_value * (self.max_position_pct / 100)
+        # Model decides allocation. If not suggested, derive from conviction.
+        if suggested_allocation_pct is not None:
+            allocation_pct = suggested_allocation_pct
+        else:
+            # Default: conviction maps to allocation
+            # conviction 0.3 -> 3%, conviction 1.0 -> 10%
+            allocation_pct = max(1.0, conviction * 10.0)
 
-        # Adjust by conviction (higher conviction = larger position)
-        conviction_multiplier = min(1.0, conviction / 0.8)  # Scale to 0.8 as full conviction
-        target_value = max_position_value * conviction_multiplier
+        target_value = portfolio_value * (allocation_pct / 100.0)
 
-        # Check daily loss limit
-        today = datetime.now().strftime("%Y-%m-%d")
-        daily_loss = self.trades.get("daily_pnl", {}).get(today, 0)
-        if daily_loss < 0:
-            loss_pct = abs(daily_loss) / portfolio_value * 100
-            if loss_pct >= self.max_daily_loss_pct:
-                return {
-                    "qty": 0,
-                    "notional": 0,
-                    "action": "skip",
-                    "reasoning": f"Daily loss limit reached ({loss_pct:.1f}%)",
-                }
-            # Reduce position size proportionally
-            remaining_budget = 1 - (loss_pct / self.max_daily_loss_pct)
-            target_value *= remaining_budget
+        # Hard ceiling: never more than 25% in one position (safety)
+        max_single = portfolio_value * 0.25
+        if target_value > max_single:
+            target_value = max_single
 
-        # Calculate shares
+        # Don't exceed available buying power
+        if target_value > portfolio_value * 0.95:
+            target_value = portfolio_value * 0.95
+
         qty = int(target_value / price)
-
-        # Ensure we don't exceed buying power
-        if qty * price > portfolio_value * 0.95:  # 5% buffer
-            qty = int((portfolio_value * 0.95) / price)
-
         if qty <= 0:
             return {
                 "qty": 0,
@@ -131,70 +121,11 @@ class RiskManager:
         return {
             "qty": qty,
             "notional": actual_notional,
-            "action": "buy",
+            "action": "execute",
             "reasoning": (
-                f"Position size: {qty} shares @ ${price:.2f} = ${actual_notional:.2f} "
-                f"({actual_notional/portfolio_value*100:.1f}% of portfolio, "
-                f"conviction: {conviction:.2f})"
+                f"Model allocation: {allocation_pct:.1f}% of portfolio = ${actual_notional:,.2f} "
+                f"({qty} shares @ ${price:.2f}, conviction: {conviction:.2f})"
             ),
-        }
-
-    def check_stop_loss(
-        self,
-        ticker: str,
-        entry_price: float,
-        current_price: float,
-    ) -> dict:
-        """Check if a position should be stopped out.
-
-        Returns:
-            Dict with should_stop, loss_pct, and reasoning
-        """
-        if entry_price <= 0:
-            return {"should_stop": False, "loss_pct": 0, "reasoning": "Invalid entry price"}
-
-        loss_pct = ((entry_price - current_price) / entry_price) * 100
-
-        if loss_pct >= self.stop_loss_pct:
-            return {
-                "should_stop": True,
-                "loss_pct": loss_pct,
-                "reasoning": f"Stop-loss triggered: {loss_pct:.1f}% loss (threshold: {self.stop_loss_pct}%)",
-            }
-
-        return {
-            "should_stop": False,
-            "loss_pct": loss_pct,
-            "reasoning": f"Loss {loss_pct:.1f}% within tolerance",
-        }
-
-    def check_take_profit(
-        self,
-        ticker: str,
-        entry_price: float,
-        current_price: float,
-    ) -> dict:
-        """Check if a position should take profit.
-
-        Returns:
-            Dict with should_take_profit, gain_pct, and reasoning
-        """
-        if entry_price <= 0:
-            return {"should_take_profit": False, "gain_pct": 0, "reasoning": "Invalid entry price"}
-
-        gain_pct = ((current_price - entry_price) / entry_price) * 100
-
-        if gain_pct >= self.take_profit_pct:
-            return {
-                "should_take_profit": True,
-                "gain_pct": gain_pct,
-                "reasoning": f"Take-profit triggered: {gain_pct:.1f}% gain (threshold: {self.take_profit_pct}%)",
-            }
-
-        return {
-            "should_take_profit": False,
-            "gain_pct": gain_pct,
-            "reasoning": f"Gain {gain_pct:.1f}% below threshold",
         }
 
     def record_trade(
@@ -216,9 +147,9 @@ class RiskManager:
             "reason": reason,
         }
 
-        if action == "buy":
+        if action in ("buy", "short"):
             self.trades["positions"][ticker] = trade
-        elif action == "sell":
+        elif action in ("sell", "close_long", "close_short"):
             self.trades["closed"].append(trade)
             if ticker in self.trades["positions"]:
                 del self.trades["positions"][ticker]
@@ -244,7 +175,6 @@ class RiskManager:
                 "total_exposure": 0,
                 "position_count": 0,
                 "max_single_exposure": 0,
-                "concentration_risk": "low",
             }
 
         exposures = []
@@ -252,68 +182,8 @@ class RiskManager:
             exposure = (pos["market_value"] / portfolio_value) * 100
             exposures.append(exposure)
 
-        total_exposure = sum(exposures)
-        max_single = max(exposures) if exposures else 0
-
-        # Determine concentration risk
-        if max_single > 20:
-            concentration = "high"
-        elif max_single > 15:
-            concentration = "medium"
-        else:
-            concentration = "low"
-
         return {
-            "total_exposure": total_exposure,
+            "total_exposure": sum(exposures),
             "position_count": len(current_positions),
-            "max_single_exposure": max_single,
-            "concentration_risk": concentration,
-        }
-
-    def should_open_position(
-        self,
-        ticker: str,
-        conviction: float,
-        portfolio_value: float,
-        current_positions: list[dict],
-    ) -> dict:
-        """Comprehensive check if we should open a new position.
-
-        Returns:
-            Dict with should_open, sizing info, and reasoning
-        """
-        reasons = []
-
-        # Check if already holding
-        if any(p["ticker"] == ticker for p in current_positions):
-            return {
-                "should_open": False,
-                "reasoning": f"Already holding {ticker}",
-            }
-
-        # Check max positions
-        if len(current_positions) >= self.max_positions:
-            reasons.append(f"Max positions ({self.max_positions}) reached")
-
-        # Check conviction
-        if conviction < self.min_conviction:
-            reasons.append(f"Conviction {conviction:.2f} below {self.min_conviction}")
-
-        # Check daily loss
-        today = datetime.now().strftime("%Y-%m-%d")
-        daily_loss = self.trades.get("daily_pnl", {}).get(today, 0)
-        if daily_loss < 0:
-            loss_pct = abs(daily_loss) / portfolio_value * 100
-            if loss_pct >= self.max_daily_loss_pct:
-                reasons.append(f"Daily loss limit {loss_pct:.1f}% >= {self.max_daily_loss_pct}%")
-
-        if reasons:
-            return {
-                "should_open": False,
-                "reasoning": "; ".join(reasons),
-            }
-
-        return {
-            "should_open": True,
-            "reasoning": "All risk checks passed",
+            "max_single_exposure": max(exposures) if exposures else 0,
         }
