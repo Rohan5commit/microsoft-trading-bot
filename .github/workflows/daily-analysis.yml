@@ -34,6 +34,16 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - name: Restore persistent state
+        uses: actions/cache@v4
+        with:
+          path: |
+            bot/portfolio_state.json
+            bot/trades.json
+          key: trading-state-${{ github.ref_name }}
+          restore-keys: |
+            trading-state-
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -55,13 +65,16 @@ jobs:
           TRADINGAGENTS_QUICK_THINK_LLM: meta/llama-3.1-8b-instruct
           TRADINGAGENTS_TEMPERATURE: "0.1"
           PYTHONPATH: ${{ github.workspace }}
+          INPUT_TICKERS: ${{ github.event.inputs.tickers }}
+          INPUT_DEEP_COUNT: ${{ github.event.inputs.deep_count || '20' }}
+          INPUT_CONCURRENT: ${{ github.event.inputs.concurrent || '20' }}
         run: |
           cd bot
-          if [ -n "${{ github.event.inputs.tickers }}" ]; then
-            TICKERS=$(echo "${{ github.event.inputs.tickers }}" | tr ',' ' ')
-            python two_phase_scheduler.py --tickers $TICKERS --deep-count ${{ github.event.inputs.deep_count || '20' }} --concurrent ${{ github.event.inputs.concurrent || '20' }}
+          if [ -n "$INPUT_TICKERS" ]; then
+            TICKERS=$(echo "$INPUT_TICKERS" | tr ',' ' ')
+            python two_phase_scheduler.py --tickers $TICKERS --deep-count $INPUT_DEEP_COUNT --concurrent $INPUT_CONCURRENT
           else
-            python two_phase_scheduler.py --deep-count ${{ github.event.inputs.deep_count || '20' }} --concurrent ${{ github.event.inputs.concurrent || '20' }}
+            python two_phase_scheduler.py --deep-count $INPUT_DEEP_COUNT --concurrent $INPUT_CONCURRENT
           fi
 
       - name: Send error notification
