@@ -39,6 +39,7 @@ class RiskManager:
     def _save_trades(self):
         """Atomic write: write to temp file then rename."""
         dir_path = self.trades_file.parent
+        tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
             with os.fdopen(fd, "w") as f:
@@ -47,10 +48,11 @@ class RiskManager:
             os.replace(tmp_path, self.trades_file)
         except Exception:
             # Cleanup temp file on failure
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             raise
 
     def check_circuit_breaker(self, portfolio_value: float) -> dict:
@@ -77,6 +79,7 @@ class RiskManager:
         portfolio_value: float,
         current_positions: list[dict],
         suggested_allocation_pct: Optional[float] = None,
+        buying_power: Optional[float] = None,
     ) -> dict:
         """Model-driven position sizing.
 
@@ -119,8 +122,9 @@ class RiskManager:
         target_value = portfolio_value * (allocation_pct / 100.0)
 
         # Don't exceed available buying power
-        if target_value > portfolio_value * 0.95:
-            target_value = portfolio_value * 0.95
+        max_available = buying_power if buying_power is not None else portfolio_value * 0.95
+        if target_value > max_available:
+            target_value = max_available
 
         qty = int(target_value / price)
         if qty <= 0:
