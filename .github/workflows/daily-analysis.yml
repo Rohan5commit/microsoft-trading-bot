@@ -2,7 +2,7 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    # Run at 11:30 PM IST (18:00 UTC) on weekdays
+    # Run at 2:00 PM ET (18:00 UTC) on weekdays - during US market hours
     - cron: '0 18 * * 1-5'
   workflow_dispatch:
     inputs:
@@ -21,7 +21,10 @@ on:
 
 permissions:
   contents: read
-  actions: write
+
+concurrency:
+  group: trading-analysis
+  cancel-in-progress: false
 
 jobs:
   analyze:
@@ -44,7 +47,7 @@ jobs:
           path: |
             bot/portfolio_state.json
             bot/trades.json
-          key: trading-state-${{ github.ref_name }}-${{ github.run_number }}
+          key: trading-state-${{ github.ref_name }}
           restore-keys: |
             trading-state-${{ github.ref_name }}-
 
@@ -55,6 +58,7 @@ jobs:
 
       - name: Run two-phase analysis
         id: run_analysis
+        timeout-minutes: 110
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           TWELVE_DATA_KEYS: ${{ secrets.TWELVE_DATA_KEYS }}
@@ -78,9 +82,9 @@ jobs:
           cd bot
           if [ -n "$INPUT_TICKERS" ]; then
             TICKERS=$(echo "$INPUT_TICKERS" | tr ',' ' ')
-            python two_phase_scheduler.py --tickers $TICKERS --deep-count $INPUT_DEEP_COUNT --concurrent $INPUT_CONCURRENT
+            python two_phase_scheduler.py --tickers "$TICKERS" --deep-count "$INPUT_DEEP_COUNT" --concurrent "$INPUT_CONCURRENT"
           else
-            python two_phase_scheduler.py --deep-count $INPUT_DEEP_COUNT --concurrent $INPUT_CONCURRENT
+            python two_phase_scheduler.py --deep-count "$INPUT_DEEP_COUNT" --concurrent "$INPUT_CONCURRENT"
           fi
 
       - name: Upload results
@@ -89,6 +93,7 @@ jobs:
         with:
           name: two-phase-results-${{ github.run_number }}
           path: bot/results/
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Upload logs
@@ -99,4 +104,5 @@ jobs:
           path: |
             bot/bot.log
             bot/scheduler.log
+          if-no-files-found: warn
           retention-days: 7

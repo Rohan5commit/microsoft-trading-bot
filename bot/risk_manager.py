@@ -1,11 +1,14 @@
 """Risk management - minimal circuit breaker. Model decides everything."""
 
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class RiskManager:
@@ -28,7 +31,7 @@ class RiskManager:
             else:
                 self.trades = {"positions": {}, "closed": [], "daily_pnl": {}}
         except (json.JSONDecodeError, ValueError) as e:
-            # Corrupted file - back up and start fresh
+            logger.warning(f"Corrupted trades.json, backing up: {e}")
             backup = self.trades_file.with_suffix(".json.bak")
             try:
                 self.trades_file.rename(backup)
@@ -44,10 +47,8 @@ class RiskManager:
             fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
             with os.fdopen(fd, "w") as f:
                 json.dump(self.trades, f, indent=2, default=str)
-            # Atomic rename
             os.replace(tmp_path, self.trades_file)
         except Exception:
-            # Cleanup temp file on failure
             if tmp_path is not None:
                 try:
                     os.unlink(tmp_path)
@@ -86,6 +87,15 @@ class RiskManager:
         The model provides conviction and suggested allocation %.
         We only enforce buying power limits and circuit breaker.
         """
+        # Guard against zero/negative price
+        if price <= 0:
+            return {
+                "qty": 0,
+                "notional": 0,
+                "action": "skip",
+                "reasoning": f"Invalid price ${price} for {ticker}",
+            }
+
         # Circuit breaker check
         cb = self.check_circuit_breaker(portfolio_value)
         if cb["tripped"]:
@@ -112,6 +122,15 @@ class RiskManager:
                 "notional": 0,
                 "action": "skip",
                 "reasoning": "Model did not specify allocation % — trade skipped",
+            }
+
+        # Respect 0% allocation (model says don't buy)
+        if suggested_allocation_pct <= 0:
+            return {
+                "qty": 0,
+                "notional": 0,
+                "action": "skip",
+                "reasoning": f"Model allocated {suggested_allocation_pct}% — no position opened",
             }
 
         allocation_pct = suggested_allocation_pct
@@ -188,7 +207,7 @@ class RiskManager:
         portfolio_value: float,
     ) -> dict:
         """Get portfolio-level risk metrics."""
-        if not current_positions:
+        if not current_positions or portfolio_value <= 0:
             return {
                 "total_exposure": 0,
                 "position_count": 0,

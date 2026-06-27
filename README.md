@@ -41,7 +41,7 @@ Required:
 ### 3. Verify Setup
 
 ```bash
-python bot/setup.py
+python -c "from bot.two_phase_bot import TwoPhaseBot; print('Setup OK')"
 ```
 
 ## Usage
@@ -60,7 +60,7 @@ python bot/two_phase_scheduler.py --deep-count 20
 
 ## GitHub Actions
 
-Runs daily at 9:30 AM ET on weekdays.
+Runs daily at 2:00 PM ET (18:00 UTC) on weekdays during US market hours.
 
 ### Manual Trigger
 

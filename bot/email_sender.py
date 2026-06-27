@@ -505,6 +505,8 @@ class EmailSender:
     def _build_error_html(self, error_message: str, traceback_str: str = "") -> str:
         """Build HTML error notification body."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        safe_error = html.escape(str(error_message))
+        safe_traceback = html.escape(str(traceback_str)) if traceback_str else ""
 
         return f"""
         <!DOCTYPE html>
@@ -524,14 +526,14 @@ class EmailSender:
                     <h2 style="color: #ff1744; margin-top: 0;">Error Details</h2>
                     <div style="background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
                         <div style="color: #ff8a80; font-size: 12px; margin-bottom: 5px;">ERROR MESSAGE</div>
-                        <div style="color: #fff; font-size: 16px; font-family: monospace;">{error_message}</div>
+                        <div style="color: #fff; font-size: 16px; font-family: monospace;">{safe_error}</div>
                     </div>
                     {f"""
                     <div style="background: #16213e; padding: 15px; border-radius: 8px;">
                         <div style="color: #ff8a80; font-size: 12px; margin-bottom: 5px;">TRACEBACK</div>
-                        <pre style="color: #aaa; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">{traceback_str}</pre>
+                        <pre style="color: #aaa; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">{safe_traceback}</pre>
                     </div>
-                    """ if traceback_str else ""}
+                    """ if safe_traceback else ""}
                 </div>
 
                 <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">

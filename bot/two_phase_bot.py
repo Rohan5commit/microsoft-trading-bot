@@ -1,7 +1,7 @@
 """Two-phase trading bot: Quick scan all stocks, then deep analysis on candidates.
 
-Phase 1: Fast scan (5 min) - Analyze all 1000 stocks with single LLM call
-Phase 2: Deep analysis (1-2 hrs) - Full TradingAgents on top 20-30 candidates
+Phase 1: Fast scan (5 min) - Analyze all stocks with single LLM call
+Phase 2: Deep analysis (1-2 hrs) - Full TradingAgents on top candidates
 
 Model decides everything: allocation, conviction, entry/exit. No fixed constraints.
 """
@@ -32,6 +32,13 @@ except ImportError:
     TRADINGAGENTS_AVAILABLE = False
     DEFAULT_CONFIG = {}
     TradingAgentsGraph = None
+
+try:
+    from langchain_core.messages import HumanMessage
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    HumanMessage = None
 
 from risk_manager import RiskManager
 from universe import get_universe
@@ -85,16 +92,16 @@ class TwoPhaseBot:
         if ALPACA_AVAILABLE and os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"):
             try:
                 self.alpaca = AlpacaClient(paper=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Alpaca init failed: {type(e).__name__}: {e}")
 
         # Email sender optional
         self.email_sender = None
         if EMAIL_AVAILABLE and os.getenv("GMAIL_APP_PASSWORD"):
             try:
                 self.email_sender = EmailSender()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Email sender init failed: {type(e).__name__}: {e}")
 
         # Portfolio tracker optional
         self.portfolio = None
@@ -106,16 +113,17 @@ class TwoPhaseBot:
                     self.portfolio.initial_capital = portfolio_config["initial_capital"]
                 if "leverage" in portfolio_config:
                     self.portfolio.leverage = portfolio_config["leverage"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Portfolio tracker init failed: {type(e).__name__}: {e}")
 
         # TradingAgents config for deep analysis
         if TRADINGAGENTS_AVAILABLE:
             self.ta_config = DEFAULT_CONFIG.copy()
-            self.ta_config["llm_provider"] = self.config["llm"]["provider"]
-            self.ta_config["deep_think_llm"] = self.config["llm"]["deep_think_model"]
-            self.ta_config["quick_think_llm"] = self.config["llm"]["quick_think_model"]
-            self.ta_config["temperature"] = self.config["llm"]["temperature"]
+            llm_cfg = self.config.get("llm", {})
+            self.ta_config["llm_provider"] = llm_cfg.get("provider", "nvidia")
+            self.ta_config["deep_think_llm"] = llm_cfg.get("deep_think_model", "meta/llama-3.1-70b-instruct")
+            self.ta_config["quick_think_llm"] = llm_cfg.get("quick_think_model", "meta/llama-3.1-8b-instruct")
+            self.ta_config["temperature"] = llm_cfg.get("temperature", 0.1)
         else:
             self.ta_config = {}
             logger.warning("TradingAgents not available - deep analysis disabled")
@@ -197,6 +205,7 @@ class TwoPhaseBot:
     def batch_get_prices(self, tickers: list[str]) -> dict[str, float]:
         """Fetch prices for multiple tickers concurrently."""
         prices = {}
+        failed_count = 0
 
         def fetch_one(ticker):
             try:
@@ -210,18 +219,28 @@ class TwoPhaseBot:
                 ticker, price = f.result()
                 if price > 0:
                     prices[ticker] = price
+                else:
+                    failed_count += 1
 
+        if failed_count > 0:
+            logger.warning(f"Failed to get prices for {failed_count}/{len(tickers)} tickers")
         return prices
 
     def batch_get_indicators(self, tickers: list[str]) -> dict[str, dict]:
         """Fetch indicators for multiple tickers concurrently."""
         indicators = {}
+        failed_count = 0
 
         def fetch_one(ticker):
             try:
                 rsi = self.twelve_data.get_rsi(ticker)
                 macd = self.twelve_data.get_macd(ticker)
-                return ticker, {"rsi": rsi, "macd": macd}
+                result = {}
+                if rsi is not None:
+                    result["rsi"] = rsi
+                if macd is not None:
+                    result["macd"] = macd
+                return ticker, result
             except Exception:
                 return ticker, {}
 
@@ -230,16 +249,18 @@ class TwoPhaseBot:
             for f in futures:
                 ticker, ind = f.result()
                 indicators[ticker] = ind
+                if not ind:
+                    failed_count += 1
 
+        if failed_count > 0:
+            logger.warning(f"Failed to get indicators for {failed_count}/{len(tickers)} tickers")
         return indicators
 
     def quick_scan(self, ticker: str, price: float, indicators: dict) -> dict:
         """Fast single-call scan to identify candidates."""
-        from langchain_core.messages import HumanMessage
-
         rsi = indicators.get("rsi", 50)
         macd = indicators.get("macd", {})
-        macd_hist = macd.get("histogram", 0)
+        macd_hist = macd.get("histogram", 0) if macd else 0
 
         prompt = f"""You are a stock scanner. Rate how interesting {ticker} is for trading RIGHT NOW.
 
@@ -258,6 +279,9 @@ Scoring rules:
 Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
 
         try:
+            if not TRADINGAGENTS_AVAILABLE or not LANGCHAIN_AVAILABLE:
+                raise ImportError("TradingAgents or langchain_core not available")
+
             from tradingagents.llm_clients import create_llm_client
             client = create_llm_client(
                 provider=self.ta_config["llm_provider"],
@@ -268,7 +292,7 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             text = response.content.strip()
 
             match = re.search(r'(\d+\.?\d*)', text)
-            score = float(match.group(1)) if match else 0.5
+            score = float(match.group(1)) if match else 0.0
             # Detect percentage vs decimal: if > 1.0, assume percentage
             if score > 1.0:
                 score = score / 100.0
@@ -280,8 +304,8 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             logger.error(f"Quick scan failed for {ticker}: {e}")
             return {"ticker": ticker, "score": 0.0, "price": price, "indicators": indicators}
 
-    async def phase1_scan(self, tickers: list[str], prices: dict, indicators: dict) -> list[dict]:
-        """Phase 1: Quick scan all stocks to find candidates."""
+    async def phase1_scan(self, tickers: list[str], prices: dict, indicators: dict) -> tuple[list[dict], float]:
+        """Phase 1: Quick scan all stocks to find candidates. Returns (candidates, elapsed)."""
         logger.info(f"Phase 1: Scanning {len(tickers)} stocks...")
         start = time.time()
 
@@ -309,17 +333,12 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         for c in candidates:
             logger.info(f"  {c['ticker']}: score={c['score']:.2f}, price=${c['price']:.2f}")
 
-        return candidates
+        return candidates, elapsed
 
     def _extract_conviction_and_allocation(self, decision: str, action: str) -> tuple[float, Optional[float]]:
         """Extract conviction and allocation % from model decision text.
 
         Model MUST specify allocation. If not found, returns None and trade is skipped.
-
-        Looks for patterns like:
-        - "conviction: 0.8" or "confidence: 75%"
-        - "allocation: 5%" or "allocate 5%" or "position size: 3%"
-        - "sizing: 2% of portfolio"
 
         Returns (conviction, allocation_pct or None)
         """
@@ -342,13 +361,13 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                 conviction = min(1.0, max(0.0, val))
             else:
                 lower = decision.lower()
-                if any(w in lower for w in ["strong buy", "strong buy signal", "high conviction"]):
+                if any(w in lower for w in ["strong buy", "strong buy signal", "high conviction buy"]):
                     conviction = 0.9
                 elif any(w in lower for w in ["buy", "overweight", "accumulate"]):
                     conviction = 0.75
                 elif any(w in lower for w in ["weak buy", "slight buy", "marginal"]):
                     conviction = 0.55
-                elif any(w in lower for w in ["strong sell", "strong sell signal"]):
+                elif any(w in lower for w in ["strong sell", "strong sell signal", "high conviction sell"]):
                     conviction = 0.9
                 elif any(w in lower for w in ["sell", "underweight", "reduce"]):
                     conviction = 0.75
@@ -356,47 +375,47 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                     conviction = 0.55
 
         # Extract allocation - model MUST provide this
-        # Pattern 1: "allocation: 5%" or "allocation 5%"
         alloc_match = re.search(r'allocat(?:ion|e)[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
         if not alloc_match:
-            # Pattern 1b: "allocation of 5%"
             alloc_match = re.search(r'allocat(?:ion|e)\s+of\s+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
         if alloc_match:
             allocation = float(alloc_match.group(1))
         else:
-            # Pattern 2: "position size: 3%" or "position: 3%"
             pos_match = re.search(r'position\s*(?:size)?[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
             if pos_match:
                 allocation = float(pos_match.group(1))
             else:
-                # Pattern 3: "sizing: 2% of portfolio"
                 sizing_match = re.search(r'sizing[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
                 if sizing_match:
                     allocation = float(sizing_match.group(1))
                 else:
-                    # Pattern 4: "recommend X% portfolio" or "X% of portfolio"
                     portfolio_match = re.search(r'(\d+\.?\d*)\s*%\s*(?:of\s+)?(?:portfolio|capital|equity)', decision, re.IGNORECASE)
                     if portfolio_match:
                         allocation = float(portfolio_match.group(1))
                     else:
-                        # Pattern 5: "put/invest X%" or "stake of X%"
                         stake_match = re.search(r'(?:put|invest|stake|size)[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
                         if stake_match:
                             allocation = float(stake_match.group(1))
 
         return conviction, allocation
 
-    def _force_allocation(self, ticker: str, decision: str, action: str) -> tuple[float, float]:
+    def _force_allocation(self, ticker: str, decision: str, action: str) -> tuple[float, Optional[float]]:
         """Force model to output conviction + allocation via follow-up LLM call.
 
-        Returns (conviction, allocation_pct). allocation is always provided.
+        Returns (conviction, allocation_pct). Returns None for allocation on failure
+        so the trade is skipped rather than risking with defaults.
         """
-        from langchain_core.messages import HumanMessage
+        if not LANGCHAIN_AVAILABLE:
+            logger.error("langchain_core not available for force_allocation")
+            return 0.0, None
+
+        # Keep the conclusion section (last 500 chars) intact
+        truncated = decision[-2000:] if len(decision) > 2000 else decision
 
         prompt = f"""You are a portfolio manager. Based on this analysis for {ticker}, give your final conviction and portfolio allocation.
 
 ANALYSIS:
-{decision[:2000]}
+{truncated}
 
 RECOMMENDATION: {action.upper()}
 
@@ -425,23 +444,22 @@ Do NOT include any other text. Only the two lines above."""
             conv_match = re.search(r'CONVICTION:\s*(\d+\.?\d*)', text, re.IGNORECASE)
             alloc_match = re.search(r'ALLOCATION:\s*(\d+\.?\d*)', text, re.IGNORECASE)
 
-            conviction = 0.7
-            allocation = 5.0  # default 5% if parsing fails
+            if not conv_match or not alloc_match:
+                logger.warning(f"Force allocation parse failed for {ticker}: {text[:200]}")
+                return 0.0, None
 
-            if conv_match:
-                conviction = float(conv_match.group(1))
-                conviction = max(0.0, min(1.0, conviction))
+            conviction = float(conv_match.group(1))
+            conviction = max(0.0, min(1.0, conviction))
 
-            if alloc_match:
-                allocation = float(alloc_match.group(1))
-                allocation = max(0.1, min(25.0, allocation))
+            allocation = float(alloc_match.group(1))
+            allocation = max(0.0, min(25.0, allocation))
 
             logger.info(f"Forced allocation for {ticker}: conviction={conviction:.2f}, allocation={allocation:.1f}%")
             return conviction, allocation
 
         except Exception as e:
             logger.error(f"Force allocation failed for {ticker}: {e}")
-            return 0.7, 5.0
+            return 0.0, None
 
     def _detect_action(self, decision: str) -> str:
         """Detect action from LLM decision text, handling negation.
@@ -477,12 +495,11 @@ Do NOT include any other text. Only the two lines above."""
         has_buy_negation = any(re.search(p, lower) for p in negation_patterns[:10])
         has_sell_negation = any(re.search(p, lower) for p in negation_patterns[10:])
 
-        # Strong signals (look for emphatic/declarative patterns)
+        # Strong signals
         strong_buy = any(w in lower for w in ["strong buy", "strong buy signal", "high conviction buy", "overweight", "accumulate"])
         strong_sell = any(w in lower for w in ["strong sell", "strong sell signal", "high conviction sell", "underweight"])
 
-        # Check if the final recommendation (last 200 chars) is buy/sell
-        # The conclusion/recommendation section is usually at the end
+        # Check conclusion (last 200 chars)
         conclusion = lower[-200:] if len(lower) > 200 else lower
         conclusion_has_buy = any(w in conclusion for w in ["buy", "buy signal", "go long", "long position"])
         conclusion_has_sell = any(w in conclusion for w in ["sell", "sell signal", "go short", "short position"])
@@ -563,15 +580,14 @@ Do NOT include any other text. Only the two lines above."""
             }
 
     async def phase2_deep(self, candidates: list[dict]) -> list[dict]:
-        """Phase 2: Deep analysis on top candidates."""
+        """Phase 2: Deep analysis on top candidates (concurrent)."""
         if not candidates:
             return []
 
         logger.info(f"Phase 2: Deep analysis on {len(candidates)} candidates...")
         start = time.time()
 
-        results = []
-        for c in candidates:
+        async def analyze_one(c):
             logger.info(f"  Analyzing {c['ticker']}...")
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
@@ -580,7 +596,10 @@ Do NOT include any other text. Only the two lines above."""
             result["scan_score"] = c["score"]
             result["price"] = c["price"]
             result["indicators"] = c["indicators"]
-            results.append(result)
+            return result
+
+        tasks = [analyze_one(c) for c in candidates]
+        results = await asyncio.gather(*tasks)
 
         elapsed = time.time() - start
         logger.info(f"Phase 2 complete in {elapsed:.1f}s")
@@ -665,12 +684,17 @@ Do NOT include any other text. Only the two lines above."""
                         result["reasoning"] = sizing["reasoning"]
                     else:
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
-                        result["status"] = "filled"
-                        result["qty"] = sizing["qty"]
-                        result["order_id"] = order.get("id")
-                        result["reasoning"] = sizing["reasoning"]
-                        self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
-                        logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} = ${sizing['notional']:,.2f}")
+                        order_status = str(order.get("status", "")).lower()
+                        if order_status in ("filled", "accepted", "new"):
+                            result["status"] = "filled"
+                            result["qty"] = sizing["qty"]
+                            result["order_id"] = order.get("id")
+                            result["reasoning"] = sizing["reasoning"]
+                            self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
+                            logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} = ${sizing['notional']:,.2f}")
+                        else:
+                            result["status"] = "error"
+                            result["reasoning"] = f"Order rejected: status={order_status}"
 
                 # CASE 2: Buy signal + short position -> Close short, open long
                 elif action == "buy" and existing_side == "short":
@@ -678,12 +702,21 @@ Do NOT include any other text. Only the two lines above."""
                     qty_to_close = math.ceil(abs(float(existing_pos["qty"])))
                     entry_price = existing_pos["avg_entry_price"]
                     close_order = self.alpaca.market_buy(ticker, qty=qty_to_close)
-                    # Use fill price for P&L if available
                     fill_price = float(close_order.get("filled_avg_price") or price)
                     pnl = (entry_price - fill_price) * qty_to_close
                     self.risk_manager.update_daily_pnl(pnl)
                     self.risk_manager.record_trade(ticker, "close_short", qty_to_close, fill_price, "Closing short before long")
                     logger.info(f"CLOSE SHORT {ticker}: {qty_to_close} shares, P&L: ${pnl:+,.2f}")
+
+                    # Re-fetch portfolio state after closing short
+                    try:
+                        account = self.alpaca.get_account()
+                        portfolio_value = account["portfolio_value"]
+                        buying_power = account["buying_power"]
+                        current_positions = self.alpaca.get_positions()
+                        pos_by_ticker = {p["ticker"]: p for p in current_positions}
+                    except Exception as e:
+                        logger.warning(f"Failed to refresh state after short close: {e}")
 
                     # Open long
                     sizing = self.risk_manager.calculate_position_size(
@@ -692,14 +725,19 @@ Do NOT include any other text. Only the two lines above."""
                     )
                     if sizing["action"] != "skip":
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
-                        result["status"] = "filled"
-                        result["qty"] = sizing["qty"]
-                        result["order_id"] = order.get("id")
-                        result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}) + {sizing['reasoning']}"
-                        self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
-                        logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+                        order_status = str(order.get("status", "")).lower()
+                        if order_status in ("filled", "accepted", "new"):
+                            result["status"] = "filled"
+                            result["qty"] = sizing["qty"]
+                            result["order_id"] = order.get("id")
+                            result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}) + {sizing['reasoning']}"
+                            self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
+                            logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+                        else:
+                            result["status"] = "partial"
+                            result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}), long order rejected: {order_status}"
                     else:
-                        result["status"] = "filled"
+                        result["status"] = "partial"
                         result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}), model did not open replacement long"
 
                 # CASE 3: Sell signal + long position -> Close long
@@ -707,7 +745,6 @@ Do NOT include any other text. Only the two lines above."""
                     qty_to_close = math.ceil(abs(float(existing_pos["qty"])))
                     entry_price = existing_pos["avg_entry_price"]
                     close_order = self.alpaca.market_sell(ticker, qty=qty_to_close)
-                    # Use fill price for P&L if available
                     fill_price = float(close_order.get("filled_avg_price") or price)
                     pnl = (fill_price - entry_price) * qty_to_close
                     self.risk_manager.update_daily_pnl(pnl)
@@ -728,19 +765,24 @@ Do NOT include any other text. Only the two lines above."""
                         result["reasoning"] = sizing["reasoning"]
                     else:
                         order = self.alpaca.market_sell(ticker, qty=sizing["qty"])
-                        result["status"] = "filled"
-                        result["qty"] = sizing["qty"]
-                        result["order_id"] = order.get("id")
-                        result["reasoning"] = sizing["reasoning"]
-                        self.risk_manager.record_trade(ticker, "short", sizing["qty"], price, sizing["reasoning"])
-                        logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+                        order_status = str(order.get("status", "")).lower()
+                        if order_status in ("filled", "accepted", "new"):
+                            result["status"] = "filled"
+                            result["qty"] = sizing["qty"]
+                            result["order_id"] = order.get("id")
+                            result["reasoning"] = sizing["reasoning"]
+                            self.risk_manager.record_trade(ticker, "short", sizing["qty"], price, sizing["reasoning"])
+                            logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+                        else:
+                            result["status"] = "error"
+                            result["reasoning"] = f"Order rejected: status={order_status}"
 
-                # CASE 5: Sell signal + short position -> Hold short (model already short)
+                # CASE 5: Sell signal + short position -> Hold short
                 elif action == "sell" and existing_side == "short":
                     result["status"] = "no_action"
                     result["reasoning"] = "Already short, model confirms hold"
 
-                # CASE 6: Buy signal + long position -> Hold long (model already long)
+                # CASE 6: Buy signal + long position -> Hold long
                 elif action == "buy" and existing_side == "long":
                     result["status"] = "no_action"
                     result["reasoning"] = "Already long, model confirms hold"
@@ -779,8 +821,10 @@ Do NOT include any other text. Only the two lines above."""
         filled = [r for r in execution_results if r["status"] == "filled"]
         skipped = [r for r in execution_results if r["status"] == "skipped"]
         errors = [r for r in execution_results if r["status"] == "error"]
+        circuit_breakers = [r for r in execution_results if r["status"] == "circuit_breaker"]
 
-        logger.info(f"Execution complete: {len(filled)} filled, {len(skipped)} skipped, {len(errors)} errors")
+        logger.info(f"Execution complete: {len(filled)} filled, {len(skipped)} skipped, {len(errors)} errors"
+                     + (f", {len(circuit_breakers)} circuit breaker" if circuit_breakers else ""))
 
         return execution_results
 
@@ -788,8 +832,8 @@ Do NOT include any other text. Only the two lines above."""
         self, tickers: Optional[list[str]] = None, deep_count: int = None
     ) -> dict:
         """Run the full two-phase analysis + execution."""
-        if deep_count:
-            self.deep_count = deep_count
+        # Use local variable instead of mutating instance state
+        effective_deep_count = deep_count if deep_count else self.deep_count
 
         total_start = time.time()
         logger.info("=" * 60)
@@ -811,7 +855,10 @@ Do NOT include any other text. Only the two lines above."""
         logger.info(f"Got indicators for {len(indicators)}/{len(tickers)}")
 
         # Phase 1: Quick scan
-        candidates = await self.phase1_scan(tickers, prices, indicators)
+        candidates, phase1_elapsed = await self.phase1_scan(tickers, prices, indicators)
+
+        # Limit candidates to effective_deep_count
+        candidates = candidates[:effective_deep_count]
 
         # Phase 2: Deep analysis
         deep_results = await self.phase2_deep(candidates)
@@ -836,7 +883,7 @@ Do NOT include any other text. Only the two lines above."""
             "phase1": {
                 "total_scanned": len(tickers),
                 "candidates_found": len(candidates),
-                "elapsed_seconds": 0,
+                "elapsed_seconds": round(phase1_elapsed, 1),
             },
             "phase2": {
                 "analyzed": len(deep_results),
@@ -864,7 +911,7 @@ Do NOT include any other text. Only the two lines above."""
         logger.info("=" * 60)
         logger.info(f"TWO-PHASE ANALYSIS COMPLETE")
         logger.info(f"Total time: {total_elapsed:.1f}s ({total_elapsed/60:.1f} min)")
-        logger.info(f"Phase 1: {len(tickers)} scanned -> {len(candidates)} candidates")
+        logger.info(f"Phase 1: {len(tickers)} scanned -> {len(candidates)} candidates ({phase1_elapsed:.1f}s)")
         logger.info(f"Phase 2: {len(deep_results)} analyzed")
         logger.info(f"  Buy: {len(buy_signals)}, Sell: {len(sell_signals)}, Hold: {len(hold_signals)}")
         if execution_results:
@@ -874,8 +921,9 @@ Do NOT include any other text. Only the two lines above."""
         if buy_signals:
             logger.info("\nBUY SIGNALS:")
             for b in sorted(buy_signals, key=lambda x: x["conviction"], reverse=True):
+                reasoning = (b.get("reasoning") or "")[:100]
                 logger.info(f"  {b['ticker']}: ${b['price']:.2f} (conviction: {b['conviction']:.2f})")
-                logger.info(f"    {b['reasoning'][:100]}...")
+                logger.info(f"    {reasoning}...")
 
         # Save results
         results_path = Path(__file__).parent / "results" / f"two_phase_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"

@@ -25,6 +25,9 @@ bot/cache/
 bot/results/
 bot/backtest_results/
 bot/trades.json
+bot/trades.json.bak
+bot/portfolio_state.json
+bot/portfolio_state.json.bak
 bot/bot.log
 bot/scheduler.log
 universe.json

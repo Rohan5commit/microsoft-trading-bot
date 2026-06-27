@@ -1,14 +1,17 @@
 """Twelve Data API client with rotating API keys."""
 
-import os
-import time
 import json
+import logging
+import os
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from itertools import cycle
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class TwelveDataClient:
@@ -32,20 +35,26 @@ class TwelveDataClient:
                 "or pass keys directly."
             )
 
-        self.api_keys = cycle(api_keys)
-        self.current_key = next(self.api_keys)
-        self.key_usage = {k: 0 for k in api_keys}
+        self._api_keys = list(api_keys)
+        self._key_index = 0
+        self._lock = threading.Lock()
+        self.key_usage = {k: 0 for k in self._api_keys}
         self.cache_dir = Path(__file__).parent / "cache" / "twelvedata"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_key(self) -> str:
-        """Get next API key (rotation)."""
-        self.current_key = next(self.api_keys)
-        return self.current_key
+        """Get next API key (thread-safe rotation)."""
+        with self._lock:
+            key = self._api_keys[self._key_index % len(self._api_keys)]
+            self._key_index += 1
+            return key
 
     def _request(self, endpoint: str, params: dict) -> dict:
         """Make API request with key rotation on rate limit."""
-        for _ in range(len(self.key_usage)):
+        # Copy params to avoid mutating the caller's dict
+        params = dict(params)
+
+        for _ in range(len(self._api_keys)):
             key = self._get_key()
             params["apikey"] = key
 
@@ -59,16 +68,24 @@ class TwelveDataClient:
 
                 # Check for rate limit
                 if "code" in data and data["code"] == 429:
-                    time.sleep(0.5)
+                    retry_after = float(data.get("retry_after", 1.0))
+                    time.sleep(min(retry_after, 5.0))
                     continue
 
                 self.key_usage[key] += 1
                 return data
 
+            except requests.exceptions.Timeout:
+                logger.warning(f"Twelve Data request timed out for endpoint={endpoint}")
+                continue
+            except requests.exceptions.ConnectionError:
+                logger.warning(f"Twelve Data connection error for endpoint={endpoint}")
+                continue
             except Exception as e:
+                logger.warning(f"Twelve Data request failed for endpoint={endpoint}: {type(e).__name__}")
                 continue
 
-        raise Exception("All API keys exhausted or rate limited")
+        raise Exception(f"All Twelve Data API keys exhausted or rate limited for endpoint={endpoint}")
 
     def get_quote(self, symbol: str) -> dict:
         """Get real-time quote for a symbol."""
@@ -82,7 +99,7 @@ class TwelveDataClient:
                 cache_time = datetime.fromisoformat(cached["timestamp"])
                 if datetime.now() - cache_time < timedelta(minutes=1):
                     return cached["data"]
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, ValueError):
                 pass
 
         data = self._request("quote", {"symbol": symbol})
@@ -101,13 +118,19 @@ class TwelveDataClient:
                 "previous_close": float(data.get("previous_close", 0)),
             }
 
-            # Cache it
-            with open(cache_file, "w") as f:
-                json.dump({"timestamp": datetime.now().isoformat(), "data": result}, f)
+            # Atomic cache write
+            try:
+                cache_file_tmp = cache_file.with_suffix(".tmp")
+                with open(cache_file_tmp, "w") as f:
+                    json.dump({"timestamp": datetime.now().isoformat(), "data": result}, f)
+                os.replace(cache_file_tmp, cache_file)
+            except Exception as e:
+                logger.warning(f"Failed to cache quote for {symbol}: {e}")
 
             return result
 
-        raise Exception(f"Failed to get quote for {symbol}: {data}")
+        error_msg = data.get("message", "unknown error")
+        raise Exception(f"Failed to get quote for {symbol}: {error_msg}")
 
     def get_time_series(
         self,
@@ -117,18 +140,7 @@ class TwelveDataClient:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> list[dict]:
-        """Get time series data for a symbol.
-
-        Args:
-            symbol: Stock symbol
-            interval: 1min, 5min, 15min, 30min, 45min, 1h, 2h, 4h, 1day, 1week, 1month
-            outputsize: Number of data points
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
-
-        Returns:
-            List of OHLCV bars
-        """
+        """Get time series data for a symbol."""
         params = {
             "symbol": symbol,
             "interval": interval,
@@ -155,65 +167,78 @@ class TwelveDataClient:
                 for bar in data["values"]
             ]
 
-        raise Exception(f"Failed to get time series for {symbol}: {data}")
+        error_msg = data.get("message", "unknown error")
+        raise Exception(f"Failed to get time series for {symbol}: {error_msg}")
 
     def get_price(self, symbol: str) -> float:
         """Get current price for a symbol."""
         quote = self.get_quote(symbol)
         return quote["close"]
 
-    def get_ema(self, symbol: str, period: int = 20, interval: str = "1day") -> float:
-        """Get EMA (Exponential Moving Average)."""
-        data = self._request("ema", {
-            "symbol": symbol,
-            "interval": interval,
-            "time_period": period,
-        })
-        if "values" in data and data["values"]:
-            return float(data["values"][0].get("ema", 0))
-        return 0
+    def get_ema(self, symbol: str, period: int = 20, interval: str = "1day") -> Optional[float]:
+        """Get EMA (Exponential Moving Average). Returns None on failure."""
+        try:
+            data = self._request("ema", {
+                "symbol": symbol,
+                "interval": interval,
+                "time_period": period,
+            })
+            if "values" in data and data["values"]:
+                return float(data["values"][0].get("ema", 0))
+        except Exception as e:
+            logger.warning(f"Failed to get EMA for {symbol}: {e}")
+        return None
 
-    def get_rsi(self, symbol: str, period: int = 14, interval: str = "1day") -> float:
-        """Get RSI (Relative Strength Index)."""
-        data = self._request("rsi", {
-            "symbol": symbol,
-            "interval": interval,
-            "time_period": period,
-        })
-        if "values" in data and data["values"]:
-            return float(data["values"][0].get("rsi", 0))
-        return 50  # neutral
+    def get_rsi(self, symbol: str, period: int = 14, interval: str = "1day") -> Optional[float]:
+        """Get RSI (Relative Strength Index). Returns None on failure."""
+        try:
+            data = self._request("rsi", {
+                "symbol": symbol,
+                "interval": interval,
+                "time_period": period,
+            })
+            if "values" in data and data["values"]:
+                return float(data["values"][0].get("rsi", 0))
+        except Exception as e:
+            logger.warning(f"Failed to get RSI for {symbol}: {e}")
+        return None
 
-    def get_macd(self, symbol: str, interval: str = "1day") -> dict:
-        """Get MACD indicator."""
-        data = self._request("macd", {
-            "symbol": symbol,
-            "interval": interval,
-        })
-        if "values" in data and data["values"]:
-            val = data["values"][0]
-            return {
-                "macd": float(val.get("macd", 0)),
-                "signal": float(val.get("signal", 0)),
-                "histogram": float(val.get("histogram", 0)),
-            }
-        return {"macd": 0, "signal": 0, "histogram": 0}
+    def get_macd(self, symbol: str, interval: str = "1day") -> Optional[dict]:
+        """Get MACD indicator. Returns None on failure."""
+        try:
+            data = self._request("macd", {
+                "symbol": symbol,
+                "interval": interval,
+            })
+            if "values" in data and data["values"]:
+                val = data["values"][0]
+                return {
+                    "macd": float(val.get("macd", 0)),
+                    "signal": float(val.get("signal", 0)),
+                    "histogram": float(val.get("histogram", 0)),
+                }
+        except Exception as e:
+            logger.warning(f"Failed to get MACD for {symbol}: {e}")
+        return None
 
-    def get_bollinger_bands(self, symbol: str, period: int = 20, interval: str = "1day") -> dict:
-        """Get Bollinger Bands."""
-        data = self._request("bbands", {
-            "symbol": symbol,
-            "interval": interval,
-            "time_period": period,
-        })
-        if "values" in data and data["values"]:
-            val = data["values"][0]
-            return {
-                "upper": float(val.get("upper_band", 0)),
-                "middle": float(val.get("middle_band", 0)),
-                "lower": float(val.get("lower_band", 0)),
-            }
-        return {"upper": 0, "middle": 0, "lower": 0}
+    def get_bollinger_bands(self, symbol: str, period: int = 20, interval: str = "1day") -> Optional[dict]:
+        """Get Bollinger Bands. Returns None on failure."""
+        try:
+            data = self._request("bbands", {
+                "symbol": symbol,
+                "interval": interval,
+                "time_period": period,
+            })
+            if "values" in data and data["values"]:
+                val = data["values"][0]
+                return {
+                    "upper": float(val.get("upper_band", 0)),
+                    "middle": float(val.get("middle_band", 0)),
+                    "lower": float(val.get("lower_band", 0)),
+                }
+        except Exception as e:
+            logger.warning(f"Failed to get Bollinger Bands for {symbol}: {e}")
+        return None
 
     def get_stock_list(self, exchange: str = "NASDAQ") -> list[dict]:
         """Get list of stocks on an exchange."""
@@ -261,7 +286,10 @@ if __name__ == "__main__":
 
     # Test indicators
     rsi = client.get_rsi("AAPL")
-    print(f"\nRSI: {rsi:.2f}")
+    print(f"\nRSI: {rsi:.2f}" if rsi is not None else "\nRSI: N/A")
 
     macd = client.get_macd("AAPL")
-    print(f"MACD: {macd['macd']:.4f}, Signal: {macd['signal']:.4f}")
+    if macd:
+        print(f"MACD: {macd['macd']:.4f}, Signal: {macd['signal']:.4f}")
+    else:
+        print("MACD: N/A")

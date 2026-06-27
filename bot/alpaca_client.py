@@ -129,6 +129,8 @@ class AlpacaClient:
         Returns:
             Order details
         """
+        if qty is None and notional is None:
+            raise ValueError("Must specify either qty or notional for market_buy")
         request = MarketOrderRequest(
             symbol=ticker,
             qty=qty,
@@ -146,6 +148,8 @@ class AlpacaClient:
         notional: Optional[float] = None,
     ) -> dict:
         """Place a market sell order."""
+        if qty is None and notional is None:
+            raise ValueError("Must specify either qty or notional for market_sell")
         request = MarketOrderRequest(
             symbol=ticker,
             qty=qty,
@@ -227,7 +231,13 @@ class AlpacaClient:
         from alpaca.data.requests import StockLatestQuoteRequest
         request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
         quote = self.data_client.get_stock_latest_quote(request)
-        return float(quote[ticker].ask_price)
+        ask = quote[ticker].ask_price
+        if ask is None:
+            bid = quote[ticker].bid_price
+            if bid is not None:
+                return float(bid)
+            raise ValueError(f"No price data available for {ticker} (market may be closed)")
+        return float(ask)
 
     def get_stock_bars(
         self,

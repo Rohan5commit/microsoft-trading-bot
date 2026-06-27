@@ -1,15 +1,13 @@
 {
   "universe": {
-    "max_stocks": 1000,
-    "min_market_cap_billion": 2,
-    "sectors": ["technology", "healthcare", "finance", "consumer", "industrial", "energy"],
+    "max_stocks": 100,
     "exclude": ["SPY", "QQQ", "IWM", "DIA"],
     "refresh_days": 30
   },
   "trading": {
     "mode": "paper",
     "universe_file": "universe.json",
-    "analysis_time": "09:00",
+    "analysis_time": "14:00",
     "timezone": "US/Eastern",
     "holding_period_days": 5,
     "min_volume": 1000000
@@ -26,8 +24,7 @@
   },
   "portfolio": {
     "initial_capital": 100000.0,
-    "leverage": 2.0,
-    "previous_return_pct": 0.0
+    "leverage": 2.0
   },
   "execution": {
     "enabled": true,
