@@ -34,16 +34,8 @@ class EmailSender:
             )
 
     def send_daily_update(self, analysis_results: dict, alpaca_status: Optional[dict] = None) -> bool:
-        """Send daily trading bot update email.
-
-        Args:
-            analysis_results: Results from two-phase analysis
-            alpaca_status: Alpaca account status (optional)
-
-        Returns:
-            True if sent successfully
-        """
-        subject = f"Microsoft Trading Bot - Daily Update {datetime.now().strftime('%Y-%m-%d')}"
+        """Send daily trading bot update email."""
+        subject = f"Trading Bot - Daily Update {datetime.now().strftime('%Y-%m-%d')}"
         html_body = self._build_html(analysis_results, alpaca_status)
 
         msg = MIMEMultipart("alternative")
@@ -92,14 +84,13 @@ class EmailSender:
         """Build HTML email body."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Extract analysis data
         phase1 = results.get("phase1", {})
         phase2 = results.get("phase2", {})
         deep_results = results.get("deep_results", [])
         total_time = results.get("total_elapsed_seconds", 0)
         portfolio_metrics = results.get("portfolio_metrics")
+        execution = results.get("execution", {})
 
-        # Build buy/sell signals
         buy_signals = [r for r in deep_results if r.get("action") == "buy"]
         sell_signals = [r for r in deep_results if r.get("action") == "sell"]
         hold_signals = [r for r in deep_results if r.get("action") == "hold"]
@@ -176,9 +167,12 @@ class EmailSender:
             for pos in positions:
                 pnl = pos.get("unrealized_pl", 0)
                 pnl_color = "#00c853" if pnl >= 0 else "#ff1744"
+                side = pos.get("side", "long")
+                side_color = "#00c853" if side == "long" else "#ff1744"
                 positions_html += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">{pos.get('ticker', 'N/A')}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333; color: {side_color};">{side.upper()}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">{pos.get('qty', 0)}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">${pos.get('avg_entry_price', 0):.2f}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">${pos.get('current_price', 0):.2f}</td>
@@ -196,6 +190,7 @@ class EmailSender:
                     <thead>
                         <tr style="background: #16213e;">
                             <th style="padding: 10px; text-align: left; color: #888;">Ticker</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Side</th>
                             <th style="padding: 10px; text-align: left; color: #888;">Qty</th>
                             <th style="padding: 10px; text-align: left; color: #888;">Entry</th>
                             <th style="padding: 10px; text-align: left; color: #888;">Current</th>
@@ -233,6 +228,92 @@ class EmailSender:
                 </div>
                 {positions_header}
                 {positions_table}
+            </div>
+            """
+
+        # Execution results section
+        execution_html = ""
+        exec_results = execution.get("results", [])
+        if exec_results:
+            exec_rows = ""
+            for r in exec_results:
+                status = r.get("status", "unknown")
+                if status == "filled":
+                    status_color = "#00c853"
+                    status_text = "FILLED"
+                elif status == "skipped":
+                    status_color = "#ffd600"
+                    status_text = "SKIPPED"
+                elif status == "error":
+                    status_color = "#ff1744"
+                    status_text = "ERROR"
+                elif status == "no_action":
+                    status_color = "#888"
+                    status_text = "NO ACTION"
+                elif status == "circuit_breaker":
+                    status_color = "#ff1744"
+                    status_text = "CIRCUIT BREAKER"
+                else:
+                    status_color = "#888"
+                    status_text = status.upper()
+
+                signal = r.get("signal", "?")
+                signal_color = "#00c853" if signal == "buy" else "#ff1744" if signal == "sell" else "#888"
+
+                qty_str = str(r.get("qty", "-")) if r.get("qty") else "-"
+                price_str = f"${r.get('price', 0):.2f}" if r.get("price") else "-"
+                reasoning = r.get("reasoning", "")[:120]
+
+                exec_rows += f"""
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #333; font-weight: bold;">{r.get('ticker', 'N/A')}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333; color: {signal_color};">{signal.upper()}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333;">{r.get('conviction', 0):.0%}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333;">{qty_str}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333;">{price_str}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333; color: {status_color}; font-weight: bold;">{status_text}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333; font-size: 11px;">{reasoning}</td>
+                </tr>
+                """
+
+            filled_count = execution.get("filled", 0)
+            skipped_count = execution.get("skipped", 0)
+            error_count = execution.get("errors", 0)
+            exec_enabled = execution.get("enabled", False)
+
+            execution_html = f"""
+            <div style="background: #1a1a2e; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #00d4ff;">
+                <h2 style="color: #00d4ff; margin-top: 0;">Trade Execution {'(LIVE)' if exec_enabled else '(DRY RUN)'}</h2>
+                <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                    <div style="background: #16213e; padding: 10px 15px; border-radius: 8px;">
+                        <span style="color: #888; font-size: 12px;">Filled: </span>
+                        <span style="color: #00c853; font-weight: bold;">{filled_count}</span>
+                    </div>
+                    <div style="background: #16213e; padding: 10px 15px; border-radius: 8px;">
+                        <span style="color: #888; font-size: 12px;">Skipped: </span>
+                        <span style="color: #ffd600; font-weight: bold;">{skipped_count}</span>
+                    </div>
+                    <div style="background: #16213e; padding: 10px 15px; border-radius: 8px;">
+                        <span style="color: #888; font-size: 12px;">Errors: </span>
+                        <span style="color: #ff1744; font-weight: bold;">{error_count}</span>
+                    </div>
+                </div>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #16213e;">
+                            <th style="padding: 10px; text-align: left; color: #888;">Ticker</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Signal</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Conviction</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Qty</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Price</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Status</th>
+                            <th style="padding: 10px; text-align: left; color: #888;">Reasoning</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {exec_rows}
+                    </tbody>
+                </table>
             </div>
             """
 
@@ -312,8 +393,8 @@ class EmailSender:
         <body style="margin: 0; padding: 0; background-color: #0f0f23; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
             <div style="max-width: 800px; margin: 0 auto; padding: 20px;">
                 <div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 15px; padding: 30px; margin-bottom: 20px; border: 1px solid #333;">
-                    <h1 style="color: #00d4ff; margin: 0; font-size: 28px;">Microsoft Trading Bot</h1>
-                    <p style="color: #888; margin: 5px 0 0 0;">Daily Analysis Report</p>
+                    <h1 style="color: #00d4ff; margin: 0; font-size: 28px;">Trading Bot</h1>
+                    <p style="color: #888; margin: 5px 0 0 0;">Autonomous Daily Analysis Report</p>
                     <p style="color: #666; margin: 5px 0 0 0; font-size: 12px;">{now}</p>
                 </div>
 
@@ -349,6 +430,7 @@ class EmailSender:
 
                 {portfolio_html}
                 {alpaca_html}
+                {execution_html}
                 {buy_html}
                 {sell_html}
 
@@ -361,7 +443,7 @@ class EmailSender:
                 </div>
 
                 <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-                    <p>Microsoft Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
+                    <p>Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
                     <p>This is for educational purposes only. Trading involves risk of loss.</p>
                 </div>
             </div>
@@ -373,16 +455,8 @@ class EmailSender:
 
 
     def send_error_notification(self, error_message: str, traceback_str: str = "") -> bool:
-        """Send error notification email.
-
-        Args:
-            error_message: Brief error description
-            traceback_str: Full traceback (optional)
-
-        Returns:
-            True if sent successfully
-        """
-        subject = f"Microsoft Trading Bot - ERROR {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        """Send error notification email."""
+        subject = f"Trading Bot - ERROR {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         html_body = self._build_error_html(error_message, traceback_str)
 
         msg = MIMEMultipart("alternative")
@@ -440,7 +514,7 @@ class EmailSender:
         <body style="margin: 0; padding: 0; background-color: #0f0f23; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
             <div style="max-width: 800px; margin: 0 auto; padding: 20px;">
                 <div style="background: linear-gradient(135deg, #2e1a1a 0%, #3e1616 100%); border-radius: 15px; padding: 30px; margin-bottom: 20px; border: 1px solid #ff1744;">
-                    <h1 style="color: #ff1744; margin: 0; font-size: 28px;">Microsoft Trading Bot</h1>
+                    <h1 style="color: #ff1744; margin: 0; font-size: 28px;">Trading Bot</h1>
                     <p style="color: #ff8a80; margin: 5px 0 0 0;">ERROR REPORT</p>
                     <p style="color: #666; margin: 5px 0 0 0; font-size: 12px;">{now}</p>
                 </div>
@@ -460,7 +534,7 @@ class EmailSender:
                 </div>
 
                 <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-                    <p>Microsoft Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
+                    <p>Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
                 </div>
             </div>
         </body>
