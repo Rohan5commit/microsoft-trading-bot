@@ -9,6 +9,7 @@ Model decides everything: allocation, conviction, entry/exit. No fixed constrain
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -674,13 +675,14 @@ Do NOT include any other text. Only the two lines above."""
                 # CASE 2: Buy signal + short position -> Close short, open long
                 elif action == "buy" and existing_side == "short":
                     # Close short first
-                    qty_to_close = abs(int(existing_pos["qty"]))
+                    qty_to_close = math.ceil(abs(float(existing_pos["qty"])))
                     entry_price = existing_pos["avg_entry_price"]
-                    self.alpaca.market_buy(ticker, qty=qty_to_close)
-                    # P&L on short close: (entry - exit) * qty
-                    pnl = (entry_price - price) * qty_to_close
+                    close_order = self.alpaca.market_buy(ticker, qty=qty_to_close)
+                    # Use fill price for P&L if available
+                    fill_price = float(close_order.get("filled_avg_price") or price)
+                    pnl = (entry_price - fill_price) * qty_to_close
                     self.risk_manager.update_daily_pnl(pnl)
-                    self.risk_manager.record_trade(ticker, "close_short", qty_to_close, price, "Closing short before long")
+                    self.risk_manager.record_trade(ticker, "close_short", qty_to_close, fill_price, "Closing short before long")
                     logger.info(f"CLOSE SHORT {ticker}: {qty_to_close} shares, P&L: ${pnl:+,.2f}")
 
                     # Open long
@@ -702,17 +704,18 @@ Do NOT include any other text. Only the two lines above."""
 
                 # CASE 3: Sell signal + long position -> Close long
                 elif action == "sell" and existing_side == "long":
-                    qty_to_close = abs(int(existing_pos["qty"]))
+                    qty_to_close = math.ceil(abs(float(existing_pos["qty"])))
                     entry_price = existing_pos["avg_entry_price"]
-                    self.alpaca.market_sell(ticker, qty=qty_to_close)
-                    # P&L on long close: (exit - entry) * qty
-                    pnl = (price - entry_price) * qty_to_close
+                    close_order = self.alpaca.market_sell(ticker, qty=qty_to_close)
+                    # Use fill price for P&L if available
+                    fill_price = float(close_order.get("filled_avg_price") or price)
+                    pnl = (fill_price - entry_price) * qty_to_close
                     self.risk_manager.update_daily_pnl(pnl)
-                    self.risk_manager.record_trade(ticker, "sell", qty_to_close, price, "Closing long on sell signal")
+                    self.risk_manager.record_trade(ticker, "sell", qty_to_close, fill_price, "Closing long on sell signal")
                     result["status"] = "filled"
                     result["qty"] = qty_to_close
                     result["reasoning"] = f"Closed long: {qty_to_close} shares, P&L: ${pnl:+,.2f}"
-                    logger.info(f"SELL (close long) {ticker}: {qty_to_close} shares @ ${price:.2f}, P&L: ${pnl:+,.2f}")
+                    logger.info(f"SELL (close long) {ticker}: {qty_to_close} shares @ ${fill_price:.2f}, P&L: ${pnl:+,.2f}")
 
                 # CASE 4: Sell signal + no position -> Open short
                 elif action == "sell" and not existing_pos:

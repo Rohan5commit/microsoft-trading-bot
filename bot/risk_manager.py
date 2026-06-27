@@ -61,7 +61,7 @@ class RiskManager:
         daily_pnl = self.trades.get("daily_pnl", {})
         daily_loss = daily_pnl.get(today, 0)
 
-        if daily_loss < 0:
+        if daily_loss < 0 and portfolio_value > 0:
             loss_pct = abs(daily_loss) / portfolio_value * 100
             if loss_pct >= self.circuit_breaker_daily_loss_pct:
                 return {
