@@ -268,6 +268,9 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
 
             match = re.search(r'(\d+\.?\d*)', text)
             score = float(match.group(1)) if match else 0.5
+            # Detect percentage vs decimal: if > 1.0, assume percentage
+            if score > 1.0:
+                score = score / 100.0
             score = max(0.0, min(1.0, score))
 
             return {"ticker": ticker, "score": score, "price": price, "indicators": indicators}
@@ -289,7 +292,7 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                 ind = indicators.get(ticker, {})
                 if price <= 0:
                     return {"ticker": ticker, "score": 0, "price": 0, "indicators": {}}
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 return await loop.run_in_executor(None, self.quick_scan, ticker, price, ind)
 
         tasks = [scan_one(t) for t in tickers]
@@ -353,7 +356,10 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
 
         # Extract allocation - model MUST provide this
         # Pattern 1: "allocation: 5%" or "allocation 5%"
-        alloc_match = re.search(r'allocat[e|ion]+[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
+        alloc_match = re.search(r'allocat(?:ion|e)[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
+        if not alloc_match:
+            # Pattern 1b: "allocation of 5%"
+            alloc_match = re.search(r'allocat(?:ion|e)\s+of\s+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
         if alloc_match:
             allocation = float(alloc_match.group(1))
         else:
@@ -559,7 +565,7 @@ Do NOT include any other text. Only the two lines above."""
         results = []
         for c in candidates:
             logger.info(f"  Analyzing {c['ticker']}...")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None, self.deep_analysis, c["ticker"], datetime.now().strftime("%Y-%m-%d")
             )
@@ -747,6 +753,13 @@ Do NOT include any other text. Only the two lines above."""
                     current_positions = self.alpaca.get_positions()
                     pos_by_ticker = {p["ticker"]: p for p in current_positions}
                     logger.info(f"State refreshed: portfolio=${portfolio_value:,.2f}, positions={len(current_positions)}")
+
+                    # Check circuit breaker after each trade
+                    cb = self.risk_manager.check_circuit_breaker(portfolio_value)
+                    if cb["tripped"]:
+                        logger.warning(f"CIRCUIT BREAKER TRIPPED mid-execution: {cb['reasoning']}")
+                        execution_results.append({"status": "circuit_breaker", "reasoning": cb["reasoning"]})
+                        break
                 except Exception as e:
                     logger.warning(f"Failed to refresh state: {e}")
 
