@@ -369,8 +369,65 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
 
         return conviction, allocation
 
+    def _force_allocation(self, ticker: str, decision: str, action: str) -> tuple[float, float]:
+        """Force model to output conviction + allocation via follow-up LLM call.
+
+        Returns (conviction, allocation_pct). allocation is always provided.
+        """
+        from langchain_core.messages import HumanMessage
+
+        prompt = f"""You are a portfolio manager. Based on this analysis for {ticker}, give your final conviction and portfolio allocation.
+
+ANALYSIS:
+{decision[:2000]}
+
+RECOMMENDATION: {action.upper()}
+
+You MUST respond in EXACTLY this format (nothing else):
+
+CONVICTION: <number between 0 and 1>
+ALLOCATION: <number between 0.1 and 25, representing percent of portfolio>
+
+Example:
+CONVICTION: 0.85
+ALLOCATION: 8.5
+
+Do NOT include any other text. Only the two lines above."""
+
+        try:
+            from tradingagents.llm_clients import create_llm_client
+            client = create_llm_client(
+                provider=self.ta_config["llm_provider"],
+                model=self.ta_config["deep_think_llm"],
+            )
+            llm = client.get_llm()
+            response = llm.invoke([HumanMessage(content=prompt)])
+            text = response.content.strip()
+
+            # Parse strict format
+            conv_match = re.search(r'CONVICTION:\s*(\d+\.?\d*)', text, re.IGNORECASE)
+            alloc_match = re.search(r'ALLOCATION:\s*(\d+\.?\d*)', text, re.IGNORECASE)
+
+            conviction = 0.7
+            allocation = 5.0  # default 5% if parsing fails
+
+            if conv_match:
+                conviction = float(conv_match.group(1))
+                conviction = max(0.0, min(1.0, conviction))
+
+            if alloc_match:
+                allocation = float(alloc_match.group(1))
+                allocation = max(0.1, min(25.0, allocation))
+
+            logger.info(f"Forced allocation for {ticker}: conviction={conviction:.2f}, allocation={allocation:.1f}%")
+            return conviction, allocation
+
+        except Exception as e:
+            logger.error(f"Force allocation failed for {ticker}: {e}")
+            return 0.7, 5.0
+
     def deep_analysis(self, ticker: str, date: str) -> dict:
-        """Phase 2: Full TradingAgents multi-agent analysis."""
+        """Phase 2: Full TradingAgents multi-agent analysis + forced allocation."""
         try:
             ta = TradingAgentsGraph(debug=False, config=self.ta_config.copy())
             state, decision = ta.propagate(ticker, date)
@@ -383,13 +440,18 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             else:
                 action = "hold"
 
-            conviction, allocation = self._extract_conviction_and_allocation(decision or "", action)
+            # Force model to output conviction + allocation
+            if action != "hold":
+                conviction, allocation = self._force_allocation(ticker, decision or "", action)
+            else:
+                conviction = 0.5
+                allocation = 0.0
 
             return {
                 "ticker": ticker,
                 "action": action,
                 "conviction": conviction,
-                "suggested_allocation_pct": allocation,
+                "suggested_allocation_pct": allocation if action != "hold" else None,
                 "reasoning": decision,
                 "mode": "deep",
             }
