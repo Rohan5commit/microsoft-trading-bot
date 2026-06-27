@@ -262,7 +262,7 @@ class EmailSender:
 
                 qty_str = str(r.get("qty", "-")) if r.get("qty") else "-"
                 price_str = f"${r.get('price', 0):.2f}" if r.get("price") else "-"
-                reasoning = r.get("reasoning", "")[:120]
+                reasoning = (r.get("reasoning") or "")[:120]
 
                 exec_rows += f"""
                 <tr>
@@ -322,7 +322,7 @@ class EmailSender:
         if buy_signals:
             buy_rows = ""
             for b in sorted(buy_signals, key=lambda x: x.get("conviction", 0), reverse=True):
-                reasoning = b.get("reasoning", "")[:150]
+                reasoning = (b.get("reasoning") or "")[:150]
                 buy_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #333; color: #00c853; font-weight: bold;">{b.get('ticker', 'N/A')}</td>
@@ -355,7 +355,7 @@ class EmailSender:
         if sell_signals:
             sell_rows = ""
             for s in sorted(sell_signals, key=lambda x: x.get("conviction", 0), reverse=True):
-                reasoning = s.get("reasoning", "")[:150]
+                reasoning = (s.get("reasoning") or "")[:150]
                 sell_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #333; color: #ff1744; font-weight: bold;">{s.get('ticker', 'N/A')}</td>
