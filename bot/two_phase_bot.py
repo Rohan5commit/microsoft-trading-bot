@@ -426,19 +426,80 @@ Do NOT include any other text. Only the two lines above."""
             logger.error(f"Force allocation failed for {ticker}: {e}")
             return 0.7, 5.0
 
+    def _detect_action(self, decision: str) -> str:
+        """Detect action from LLM decision text, handling negation.
+
+        Returns "buy", "sell", or "hold".
+        """
+        lower = decision.lower()
+
+        # Check for negation patterns first
+        negation_patterns = [
+            r"don'?t\s+buy",
+            r"do\s+not\s+buy",
+            r"avoid\s+buy",
+            r"shouldn'?t\s+buy",
+            r"not\s+a\s+buy",
+            r"no\s+buy\s+signal",
+            r"not\s+recommend.*buy",
+            r"wouldn'?t\s+buy",
+            r"don'?t\s+sell",
+            r"do\s+not\s+sell",
+            r"avoid\s+sell",
+            r"shouldn'?t\s+sell",
+            r"not\s+a\s+sell",
+            r"no\s+sell\s+signal",
+            r"not\s+recommend.*sell",
+            r"wouldn'?t\s+sell",
+        ]
+
+        has_buy_negation = any(re.search(p, lower) for p in negation_patterns[:8])
+        has_sell_negation = any(re.search(p, lower) for p in negation_patterns[8:])
+
+        # Strong signals (look for emphatic/declarative patterns)
+        strong_buy = any(w in lower for w in ["strong buy", "strong buy signal", "high conviction buy", "overweight", "accumulate"])
+        strong_sell = any(w in lower for w in ["strong sell", "strong sell signal", "high conviction sell", "underweight"])
+
+        # Check if the final recommendation (last 200 chars) is buy/sell
+        # The conclusion/recommendation section is usually at the end
+        conclusion = lower[-200:] if len(lower) > 200 else lower
+        conclusion_has_buy = any(w in conclusion for w in ["buy", "buy signal", "go long", "long position"])
+        conclusion_has_sell = any(w in conclusion for w in ["sell", "sell signal", "go short", "short position"])
+
+        # General mentions (anywhere in text)
+        mention_buy = any(w in lower for w in ["buy", "accumulate"])
+        mention_sell = any(w in lower for w in ["sell", "reduce"])
+
+        # Decision logic: conclusion > strong signals > mentions, with negation override
+        if has_buy_negation and not mention_buy:
+            return "hold"
+        if has_sell_negation and not mention_sell:
+            return "hold"
+
+        if strong_buy and not has_buy_negation:
+            return "buy"
+        if strong_sell and not has_sell_negation:
+            return "sell"
+
+        if conclusion_has_buy and not has_buy_negation:
+            return "buy"
+        if conclusion_has_sell and not has_sell_negation:
+            return "sell"
+
+        if mention_buy and not has_buy_negation:
+            return "buy"
+        if mention_sell and not has_sell_negation:
+            return "sell"
+
+        return "hold"
+
     def deep_analysis(self, ticker: str, date: str) -> dict:
         """Phase 2: Full TradingAgents multi-agent analysis + forced allocation."""
         try:
             ta = TradingAgentsGraph(debug=False, config=self.ta_config.copy())
             state, decision = ta.propagate(ticker, date)
 
-            decision_lower = decision.lower() if decision else ""
-            if any(w in decision_lower for w in ["buy", "strong buy", "overweight", "accumulate"]):
-                action = "buy"
-            elif any(w in decision_lower for w in ["sell", "strong sell", "underweight", "reduce"]):
-                action = "sell"
-            else:
-                action = "hold"
+            action = self._detect_action(decision or "")
 
             # Force model to output conviction + allocation
             if action != "hold":
@@ -580,9 +641,13 @@ Do NOT include any other text. Only the two lines above."""
                 elif action == "buy" and existing_side == "short":
                     # Close short first
                     qty_to_close = abs(int(existing_pos["qty"]))
+                    entry_price = existing_pos["avg_entry_price"]
                     self.alpaca.market_buy(ticker, qty=qty_to_close)
+                    # P&L on short close: (entry - exit) * qty
+                    pnl = (entry_price - price) * qty_to_close
+                    self.risk_manager.update_daily_pnl(pnl)
                     self.risk_manager.record_trade(ticker, "close_short", qty_to_close, price, "Closing short before long")
-                    logger.info(f"CLOSE SHORT {ticker}: {qty_to_close} shares")
+                    logger.info(f"CLOSE SHORT {ticker}: {qty_to_close} shares, P&L: ${pnl:+,.2f}")
 
                     # Open long
                     sizing = self.risk_manager.calculate_position_size(
@@ -594,19 +659,26 @@ Do NOT include any other text. Only the two lines above."""
                         result["status"] = "filled"
                         result["qty"] = sizing["qty"]
                         result["order_id"] = order.get("id")
-                        result["reasoning"] = f"Closed short + {sizing['reasoning']}"
+                        result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}) + {sizing['reasoning']}"
                         self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
                         logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+                    else:
+                        result["status"] = "filled"
+                        result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}), model did not open replacement long"
 
                 # CASE 3: Sell signal + long position -> Close long
                 elif action == "sell" and existing_side == "long":
                     qty_to_close = abs(int(existing_pos["qty"]))
+                    entry_price = existing_pos["avg_entry_price"]
                     self.alpaca.market_sell(ticker, qty=qty_to_close)
+                    # P&L on long close: (exit - entry) * qty
+                    pnl = (price - entry_price) * qty_to_close
+                    self.risk_manager.update_daily_pnl(pnl)
                     self.risk_manager.record_trade(ticker, "sell", qty_to_close, price, "Closing long on sell signal")
                     result["status"] = "filled"
                     result["qty"] = qty_to_close
-                    result["reasoning"] = f"Closed long: {qty_to_close} shares"
-                    logger.info(f"SELL (close long) {ticker}: {qty_to_close} shares @ ${price:.2f}")
+                    result["reasoning"] = f"Closed long: {qty_to_close} shares, P&L: ${pnl:+,.2f}"
+                    logger.info(f"SELL (close long) {ticker}: {qty_to_close} shares @ ${price:.2f}, P&L: ${pnl:+,.2f}")
 
                 # CASE 4: Sell signal + no position -> Open short
                 elif action == "sell" and not existing_pos:
