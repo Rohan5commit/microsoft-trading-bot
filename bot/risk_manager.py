@@ -1,6 +1,8 @@
 """Risk management - minimal circuit breaker. Model decides everything."""
 
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -18,20 +20,44 @@ class RiskManager:
         self._load_trades()
 
     def _load_trades(self):
-        if self.trades_file.exists():
-            with open(self.trades_file) as f:
-                self.trades = json.load(f)
-        else:
+        """Load trades from file with corruption recovery."""
+        try:
+            if self.trades_file.exists():
+                with open(self.trades_file) as f:
+                    self.trades = json.load(f)
+            else:
+                self.trades = {"positions": {}, "closed": [], "daily_pnl": {}}
+        except (json.JSONDecodeError, ValueError) as e:
+            # Corrupted file - back up and start fresh
+            backup = self.trades_file.with_suffix(".json.bak")
+            try:
+                self.trades_file.rename(backup)
+            except OSError:
+                pass
             self.trades = {"positions": {}, "closed": [], "daily_pnl": {}}
 
     def _save_trades(self):
-        with open(self.trades_file, "w") as f:
-            json.dump(self.trades, f, indent=2, default=str)
+        """Atomic write: write to temp file then rename."""
+        dir_path = self.trades_file.parent
+        try:
+            fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+            with os.fdopen(fd, "w") as f:
+                json.dump(self.trades, f, indent=2, default=str)
+            # Atomic rename
+            os.replace(tmp_path, self.trades_file)
+        except Exception:
+            # Cleanup temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def check_circuit_breaker(self, portfolio_value: float) -> dict:
-        """Check if daily loss circuit breaker is tripped. That's it."""
+        """Check if daily loss circuit breaker is tripped."""
         today = datetime.now().strftime("%Y-%m-%d")
-        daily_loss = self.trades.get("daily_pnl", {}).get(today, 0)
+        daily_pnl = self.trades.get("daily_pnl", {})
+        daily_loss = daily_pnl.get(today, 0)
 
         if daily_loss < 0:
             loss_pct = abs(daily_loss) / portfolio_value * 100
@@ -56,18 +82,6 @@ class RiskManager:
 
         The model provides conviction and suggested allocation %.
         We only enforce buying power limits and circuit breaker.
-
-        Args:
-            ticker: Stock symbol
-            price: Current price
-            conviction: Model conviction (0-1)
-            portfolio_value: Total portfolio value
-            current_positions: List of current positions
-            suggested_allocation_pct: Model's suggested % of portfolio (0-100).
-                If None, derives from conviction (conviction * 10% of portfolio).
-
-        Returns:
-            Dict with qty, notional, action, reasoning
         """
         # Circuit breaker check
         cb = self.check_circuit_breaker(portfolio_value)
@@ -103,11 +117,6 @@ class RiskManager:
         allocation_pct = max(0.1, min(25.0, allocation_pct))
 
         target_value = portfolio_value * (allocation_pct / 100.0)
-
-        # Hard ceiling: never more than 25% in one position (safety)
-        max_single = portfolio_value * 0.25
-        if target_value > max_single:
-            target_value = max_single
 
         # Don't exceed available buying power
         if target_value > portfolio_value * 0.95:
@@ -157,16 +166,15 @@ class RiskManager:
             self.trades["positions"][ticker] = trade
         elif action in ("sell", "close_long", "close_short"):
             self.trades["closed"].append(trade)
-            if ticker in self.trades["positions"]:
-                del self.trades["positions"][ticker]
+            self.trades["positions"].pop(ticker, None)
 
         self._save_trades()
 
     def update_daily_pnl(self, pnl: float):
         """Update daily P&L tracking."""
         today = datetime.now().strftime("%Y-%m-%d")
-        if today not in self.trades.get("daily_pnl", {}):
-            self.trades.setdefault("daily_pnl", {})[today] = 0
+        self.trades.setdefault("daily_pnl", {})
+        self.trades["daily_pnl"].setdefault(today, 0)
         self.trades["daily_pnl"][today] += pnl
         self._save_trades()
 
