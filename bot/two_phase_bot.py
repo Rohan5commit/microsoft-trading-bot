@@ -3,13 +3,14 @@
 Phase 1: Fast scan (5 min) - Analyze all 1000 stocks with single LLM call
 Phase 2: Deep analysis (1-2 hrs) - Full TradingAgents on top 20-30 candidates
 
-This gives full quality on stocks that matter without wasting time on rejects.
+Model decides everything: allocation, conviction, entry/exit. No fixed constraints.
 """
 
 import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -93,7 +94,6 @@ class TwoPhaseBot:
         if PORTFOLIO_AVAILABLE:
             try:
                 self.portfolio = PortfolioTracker()
-                # Apply config settings
                 portfolio_config = self.config.get("portfolio", {})
                 if "initial_capital" in portfolio_config:
                     self.portfolio.initial_capital = portfolio_config["initial_capital"]
@@ -111,9 +111,13 @@ class TwoPhaseBot:
 
         # Deep analysis settings
         self.deep_count = self.config.get("deep_analysis", {}).get("count", 20)
-        self.min_conviction = self.config.get("deep_analysis", {}).get("min_conviction", 0.6)
+        self.min_conviction = self.config.get("deep_analysis", {}).get("min_conviction", 0.3)
 
-        logger.info(f"Two-phase bot initialized (deep_count={self.deep_count})")
+        # Execution settings
+        self.execution_enabled = self.config.get("execution", {}).get("enabled", False)
+        self.execution_mode = self.config.get("execution", {}).get("mode", "market")
+
+        logger.info(f"Two-phase bot initialized (deep_count={self.deep_count}, execution={self.execution_enabled})")
 
     def get_alpaca_status(self) -> Optional[dict]:
         """Get Alpaca account status with positions."""
@@ -155,16 +159,10 @@ class TwoPhaseBot:
     def send_error_email(self, error_message: str, traceback_str: str = "") -> bool:
         """Send error notification email."""
         if not self.email_sender:
-            logger.info("Email sender not configured, skipping error email")
             return False
 
         try:
-            success = self.email_sender.send_error_notification(error_message, traceback_str)
-            if success:
-                logger.info("Error notification email sent")
-            else:
-                logger.error("Failed to send error notification email")
-            return success
+            return self.email_sender.send_error_notification(error_message, traceback_str)
         except Exception as e:
             logger.error(f"Error email failed: {e}")
             return False
@@ -225,10 +223,7 @@ class TwoPhaseBot:
         return indicators
 
     def quick_scan(self, ticker: str, price: float, indicators: dict) -> dict:
-        """Fast single-call scan to identify candidates.
-
-        Returns score 0-1 indicating how interesting this stock is.
-        """
+        """Fast single-call scan to identify candidates."""
         from langchain_core.messages import HumanMessage
 
         rsi = indicators.get("rsi", 50)
@@ -261,8 +256,6 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             response = llm.invoke([HumanMessage(content=prompt)])
             text = response.content.strip()
 
-            # Extract number
-            import re
             match = re.search(r'(\d+\.?\d*)', text)
             score = float(match.group(1)) if match else 0.5
             score = max(0.0, min(1.0, score))
@@ -295,7 +288,6 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         elapsed = time.time() - start
         logger.info(f"Phase 1 complete in {elapsed:.1f}s")
 
-        # Sort by score and return top candidates
         scored = sorted(results, key=lambda x: x["score"], reverse=True)
         candidates = [s for s in scored if s["score"] >= self.min_conviction][:self.deep_count]
 
@@ -305,6 +297,59 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
 
         return candidates
 
+    def _extract_conviction_and_allocation(self, decision: str, action: str) -> tuple[float, Optional[float]]:
+        """Extract conviction and optional allocation % from model decision text.
+
+        The model may output phrases like:
+        - "conviction: 0.8" or "confidence: 75%"
+        - "allocate 5%" or "position size: 3%"
+
+        Returns (conviction, allocation_pct or None)
+        """
+        conviction = 0.7  # default
+        allocation = None
+
+        # Try to extract conviction
+        conv_match = re.search(r'conviction[:\s]+(\d+\.?\d*)', decision, re.IGNORECASE)
+        if conv_match:
+            val = float(conv_match.group(1))
+            if val > 1.0:
+                val = val / 100.0  # treat as percentage
+            conviction = min(1.0, max(0.0, val))
+        else:
+            conf_match = re.search(r'confidence[:\s]+(\d+\.?\d*)', decision, re.IGNORECASE)
+            if conf_match:
+                val = float(conf_match.group(1))
+                if val > 1.0:
+                    val = val / 100.0
+                conviction = min(1.0, max(0.0, val))
+            else:
+                # Look for strong/weak modifiers
+                lower = decision.lower()
+                if any(w in lower for w in ["strong buy", "strong buy signal", "high conviction"]):
+                    conviction = 0.9
+                elif any(w in lower for w in ["buy", "overweight", "accumulate"]):
+                    conviction = 0.75
+                elif any(w in lower for w in ["weak buy", "slight buy", "marginal"]):
+                    conviction = 0.55
+                elif any(w in lower for w in ["strong sell", "strong sell signal"]):
+                    conviction = 0.9
+                elif any(w in lower for w in ["sell", "underweight", "reduce"]):
+                    conviction = 0.75
+                elif any(w in lower for w in ["weak sell", "slight sell"]):
+                    conviction = 0.55
+
+        # Try to extract allocation
+        alloc_match = re.search(r'allocat[e|ion]+[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
+        if alloc_match:
+            allocation = float(alloc_match.group(1))
+        else:
+            pos_match = re.search(r'position\s+size[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
+            if pos_match:
+                allocation = float(pos_match.group(1))
+
+        return conviction, allocation
+
     def deep_analysis(self, ticker: str, date: str) -> dict:
         """Phase 2: Full TradingAgents multi-agent analysis."""
         try:
@@ -312,17 +357,20 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             state, decision = ta.propagate(ticker, date)
 
             decision_lower = decision.lower() if decision else ""
-            if any(w in decision_lower for w in ["buy", "strong buy", "overweight"]):
+            if any(w in decision_lower for w in ["buy", "strong buy", "overweight", "accumulate"]):
                 action = "buy"
-            elif any(w in decision_lower for w in ["sell", "strong sell", "underweight"]):
+            elif any(w in decision_lower for w in ["sell", "strong sell", "underweight", "reduce"]):
                 action = "sell"
             else:
                 action = "hold"
 
+            conviction, allocation = self._extract_conviction_and_allocation(decision or "", action)
+
             return {
                 "ticker": ticker,
                 "action": action,
-                "conviction": 0.8 if action != "hold" else 0.5,
+                "conviction": conviction,
+                "suggested_allocation_pct": allocation,
                 "reasoning": decision,
                 "mode": "deep",
             }
@@ -333,6 +381,7 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                 "ticker": ticker,
                 "action": "hold",
                 "conviction": 0,
+                "suggested_allocation_pct": None,
                 "reasoning": f"Error: {str(e)}",
                 "mode": "deep",
             }
@@ -345,7 +394,6 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         logger.info(f"Phase 2: Deep analysis on {len(candidates)} candidates...")
         start = time.time()
 
-        # Deep analysis is sequential (each takes ~5 min)
         results = []
         for c in candidates:
             logger.info(f"  Analyzing {c['ticker']}...")
@@ -363,14 +411,174 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
 
         return results
 
+    async def execute_trades(self, deep_results: list[dict]) -> list[dict]:
+        """Execute trades based on model decisions.
+
+        Model decides everything: what, how much, when.
+        We only enforce circuit breaker and buying power limits.
+
+        Returns list of execution results.
+        """
+        if not self.execution_enabled:
+            logger.info("Execution disabled, skipping trade execution")
+            return []
+
+        if not self.alpaca:
+            logger.warning("Alpaca not configured, cannot execute trades")
+            return []
+
+        if not self.alpaca.is_market_open():
+            logger.warning("Market is closed, skipping trade execution")
+            return []
+
+        logger.info("=" * 60)
+        logger.info("EXECUTING TRADES")
+        logger.info("=" * 60)
+
+        # Get current state
+        account = self.alpaca.get_account()
+        portfolio_value = account["portfolio_value"]
+        current_positions = self.alpaca.get_positions()
+
+        logger.info(f"Portfolio: ${portfolio_value:,.2f} | Positions: {len(current_positions)}")
+
+        # Circuit breaker check
+        cb = self.risk_manager.check_circuit_breaker(portfolio_value)
+        if cb["tripped"]:
+            logger.warning(f"CIRCUIT BREAKER TRIPPED: {cb['reasoning']}")
+            return [{"status": "circuit_breaker", "reasoning": cb["reasoning"]}]
+
+        execution_results = []
+
+        # Build position lookup
+        pos_by_ticker = {p["ticker"]: p for p in current_positions}
+
+        # Process each signal
+        for signal in deep_results:
+            ticker = signal["ticker"]
+            action = signal["action"]
+            conviction = signal["conviction"]
+            price = signal["price"]
+            allocation_pct = signal.get("suggested_allocation_pct")
+
+            if action == "hold":
+                continue
+
+            existing_pos = pos_by_ticker.get(ticker)
+            existing_side = existing_pos["side"] if existing_pos else None
+
+            result = {
+                "ticker": ticker,
+                "signal": action,
+                "conviction": conviction,
+                "price": price,
+                "status": "pending",
+                "reasoning": "",
+            }
+
+            try:
+                # CASE 1: Buy signal + no position -> Open long
+                if action == "buy" and not existing_pos:
+                    sizing = self.risk_manager.calculate_position_size(
+                        ticker, price, conviction, portfolio_value,
+                        current_positions, allocation_pct
+                    )
+                    if sizing["action"] == "skip":
+                        result["status"] = "skipped"
+                        result["reasoning"] = sizing["reasoning"]
+                    else:
+                        order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
+                        result["status"] = "filled"
+                        result["qty"] = sizing["qty"]
+                        result["order_id"] = order.get("id")
+                        result["reasoning"] = sizing["reasoning"]
+                        self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
+                        logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} = ${sizing['notional']:,.2f}")
+
+                # CASE 2: Buy signal + short position -> Close short, open long
+                elif action == "buy" and existing_side == "short":
+                    # Close short first
+                    qty_to_close = abs(int(existing_pos["qty"]))
+                    self.alpaca.market_buy(ticker, qty=qty_to_close)
+                    self.risk_manager.record_trade(ticker, "close_short", qty_to_close, price, "Closing short before long")
+                    logger.info(f"CLOSE SHORT {ticker}: {qty_to_close} shares")
+
+                    # Open long
+                    sizing = self.risk_manager.calculate_position_size(
+                        ticker, price, conviction, portfolio_value,
+                        current_positions, allocation_pct
+                    )
+                    if sizing["action"] != "skip":
+                        order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
+                        result["status"] = "filled"
+                        result["qty"] = sizing["qty"]
+                        result["order_id"] = order.get("id")
+                        result["reasoning"] = f"Closed short + {sizing['reasoning']}"
+                        self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
+                        logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+
+                # CASE 3: Sell signal + long position -> Close long
+                elif action == "sell" and existing_side == "long":
+                    qty_to_close = abs(int(existing_pos["qty"]))
+                    self.alpaca.market_sell(ticker, qty=qty_to_close)
+                    self.risk_manager.record_trade(ticker, "sell", qty_to_close, price, "Closing long on sell signal")
+                    result["status"] = "filled"
+                    result["qty"] = qty_to_close
+                    result["reasoning"] = f"Closed long: {qty_to_close} shares"
+                    logger.info(f"SELL (close long) {ticker}: {qty_to_close} shares @ ${price:.2f}")
+
+                # CASE 4: Sell signal + no position -> Open short
+                elif action == "sell" and not existing_pos:
+                    sizing = self.risk_manager.calculate_position_size(
+                        ticker, price, conviction, portfolio_value,
+                        current_positions, allocation_pct
+                    )
+                    if sizing["action"] == "skip":
+                        result["status"] = "skipped"
+                        result["reasoning"] = sizing["reasoning"]
+                    else:
+                        order = self.alpaca.market_sell(ticker, qty=sizing["qty"])
+                        result["status"] = "filled"
+                        result["qty"] = sizing["qty"]
+                        result["order_id"] = order.get("id")
+                        result["reasoning"] = sizing["reasoning"]
+                        self.risk_manager.record_trade(ticker, "short", sizing["qty"], price, sizing["reasoning"])
+                        logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+
+                # CASE 5: Sell signal + short position -> Hold short (model already short)
+                elif action == "sell" and existing_side == "short":
+                    result["status"] = "no_action"
+                    result["reasoning"] = "Already short, model confirms hold"
+
+                # CASE 6: Buy signal + long position -> Hold long (model already long)
+                elif action == "buy" and existing_side == "long":
+                    result["status"] = "no_action"
+                    result["reasoning"] = "Already long, model confirms hold"
+
+                else:
+                    result["status"] = "no_action"
+                    result["reasoning"] = f"Signal={action}, position={existing_side or 'none'}"
+
+            except Exception as e:
+                result["status"] = "error"
+                result["reasoning"] = f"Execution error: {str(e)}"
+                logger.error(f"Execution error for {ticker}: {e}")
+
+            execution_results.append(result)
+
+        # Summary
+        filled = [r for r in execution_results if r["status"] == "filled"]
+        skipped = [r for r in execution_results if r["status"] == "skipped"]
+        errors = [r for r in execution_results if r["status"] == "error"]
+
+        logger.info(f"Execution complete: {len(filled)} filled, {len(skipped)} skipped, {len(errors)} errors")
+
+        return execution_results
+
     async def run_two_phase(
         self, tickers: Optional[list[str]] = None, deep_count: int = None
     ) -> dict:
-        """Run the full two-phase analysis.
-
-        Phase 1: Quick scan all stocks (~5 min for 1000)
-        Phase 2: Deep analysis on top candidates (~5 min each)
-        """
+        """Run the full two-phase analysis + execution."""
         if deep_count:
             self.deep_count = deep_count
 
@@ -399,7 +607,10 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         # Phase 2: Deep analysis
         deep_results = await self.phase2_deep(candidates)
 
-        # Get Alpaca account status
+        # Execute trades
+        execution_results = await self.execute_trades(deep_results)
+
+        # Get Alpaca account status (after execution)
         alpaca_status = self.get_alpaca_status()
 
         # Get portfolio metrics
@@ -416,13 +627,20 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             "phase1": {
                 "total_scanned": len(tickers),
                 "candidates_found": len(candidates),
-                "elapsed_seconds": 0,  # filled below
+                "elapsed_seconds": 0,
             },
             "phase2": {
                 "analyzed": len(deep_results),
                 "buy": len(buy_signals),
                 "sell": len(sell_signals),
                 "hold": len(hold_signals),
+            },
+            "execution": {
+                "enabled": self.execution_enabled,
+                "results": execution_results,
+                "filled": len([r for r in execution_results if r.get("status") == "filled"]),
+                "skipped": len([r for r in execution_results if r.get("status") == "skipped"]),
+                "errors": len([r for r in execution_results if r.get("status") == "error"]),
             },
             "total_elapsed_seconds": round(total_elapsed, 1),
             "deep_results": deep_results,
@@ -440,6 +658,8 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         logger.info(f"Phase 1: {len(tickers)} scanned -> {len(candidates)} candidates")
         logger.info(f"Phase 2: {len(deep_results)} analyzed")
         logger.info(f"  Buy: {len(buy_signals)}, Sell: {len(sell_signals)}, Hold: {len(hold_signals)}")
+        if execution_results:
+            logger.info(f"  Execution: {summary['execution']['filled']} filled, {summary['execution']['skipped']} skipped, {summary['execution']['errors']} errors")
 
         # Show buy signals
         if buy_signals:
@@ -479,6 +699,9 @@ def main():
     print(f"\nBuy: {results['phase2']['buy']}")
     print(f"Sell: {results['phase2']['sell']}")
     print(f"Hold: {results['phase2']['hold']}")
+
+    if results["execution"]["results"]:
+        print(f"\nExecution: {results['execution']['filled']} filled, {results['execution']['skipped']} skipped, {results['execution']['errors']} errors")
 
     if results["deep_results"]:
         print(f"\nTop Buy Signals:")
