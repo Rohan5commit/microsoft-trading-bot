@@ -90,17 +90,6 @@ def _fetch_from_twelve_data(
 
     client = TwelveDataClient()
 
-    # Get stocks from major exchanges
-    exchanges = ["NASDAQ", "NYSE"]
-    all_stocks = []
-
-    for exchange in exchanges:
-        try:
-            stocks = client.get_stock_list(exchange)
-            all_stocks.extend(stocks)
-        except Exception:
-            continue
-
     # Filter by default universe (known large caps)
     valid_tickers = []
     for ticker in DEFAULT_UNIVERSE:
