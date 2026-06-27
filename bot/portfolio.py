@@ -34,22 +34,44 @@ class PortfolioTracker:
         self.state = self._load_state()
 
     def _load_state(self) -> dict:
-        """Load persisted portfolio state."""
-        if os.path.exists(self.state_file):
-            with open(self.state_file) as f:
-                return json.load(f)
-        return {
+        """Load persisted portfolio state with corruption recovery."""
+        defaults = {
             "initial_capital": 100000.0,
             "leverage": 2.0,
             "previous_return_pct": 0.0,
             "reset_count": 0,
             "last_reset_date": None,
         }
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file) as f:
+                    return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            # Corrupted file - back up and start fresh
+            backup = self.state_file + ".bak"
+            try:
+                os.rename(self.state_file, backup)
+            except OSError:
+                pass
+        return defaults
 
     def _save_state(self):
-        """Persist portfolio state."""
-        with open(self.state_file, "w") as f:
-            json.dump(self.state, f, indent=2)
+        """Atomic write: write to temp file then rename."""
+        import tempfile
+        dir_path = os.path.dirname(self.state_file) or "."
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+            with os.fdopen(fd, "w") as f:
+                json.dump(self.state, f, indent=2)
+            os.replace(tmp_path, self.state_file)
+        except Exception:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            raise
 
     @property
     def initial_capital(self) -> float:
