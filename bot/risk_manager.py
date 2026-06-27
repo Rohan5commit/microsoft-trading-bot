@@ -88,13 +88,19 @@ class RiskManager:
                 "reasoning": f"Conviction {conviction:.2f} below minimum {self.min_conviction}",
             }
 
-        # Model decides allocation. If not suggested, derive from conviction.
-        if suggested_allocation_pct is not None:
-            allocation_pct = suggested_allocation_pct
-        else:
-            # Default: conviction maps to allocation
-            # conviction 0.3 -> 3%, conviction 1.0 -> 10%
-            allocation_pct = max(1.0, conviction * 10.0)
+        # Model MUST specify allocation. No fallback.
+        if suggested_allocation_pct is None:
+            return {
+                "qty": 0,
+                "notional": 0,
+                "action": "skip",
+                "reasoning": "Model did not specify allocation % — trade skipped",
+            }
+
+        allocation_pct = suggested_allocation_pct
+
+        # Safety bounds on allocation
+        allocation_pct = max(0.1, min(25.0, allocation_pct))
 
         target_value = portfolio_value * (allocation_pct / 100.0)
 
