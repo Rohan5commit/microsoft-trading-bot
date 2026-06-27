@@ -455,22 +455,26 @@ Do NOT include any other text. Only the two lines above."""
             r"do\s+not\s+buy",
             r"avoid\s+buy",
             r"shouldn'?t\s+buy",
+            r"should\s+not\s+buy",
             r"not\s+a\s+buy",
             r"no\s+buy\s+signal",
             r"not\s+recommend.*buy",
             r"wouldn'?t\s+buy",
+            r"would\s+not\s+buy",
             r"don'?t\s+sell",
             r"do\s+not\s+sell",
             r"avoid\s+sell",
             r"shouldn'?t\s+sell",
+            r"should\s+not\s+sell",
             r"not\s+a\s+sell",
             r"no\s+sell\s+signal",
             r"not\s+recommend.*sell",
             r"wouldn'?t\s+sell",
+            r"would\s+not\s+sell",
         ]
 
-        has_buy_negation = any(re.search(p, lower) for p in negation_patterns[:8])
-        has_sell_negation = any(re.search(p, lower) for p in negation_patterns[8:])
+        has_buy_negation = any(re.search(p, lower) for p in negation_patterns[:10])
+        has_sell_negation = any(re.search(p, lower) for p in negation_patterns[10:])
 
         # Strong signals (look for emphatic/declarative patterns)
         strong_buy = any(w in lower for w in ["strong buy", "strong buy signal", "high conviction buy", "overweight", "accumulate"])
@@ -527,9 +531,12 @@ Do NOT include any other text. Only the two lines above."""
 
             action = self._detect_action(decision or "")
 
-            # Force model to output conviction + allocation
+            # First try to extract conviction + allocation from existing decision
+            # Only make extra LLM call if extraction fails
             if action != "hold":
-                conviction, allocation = self._force_allocation(ticker, decision or "", action)
+                conviction, allocation = self._extract_conviction_and_allocation(decision or "", action)
+                if allocation is None:
+                    conviction, allocation = self._force_allocation(ticker, decision or "", action)
             else:
                 conviction = 0.5
                 allocation = 0.0
@@ -606,6 +613,7 @@ Do NOT include any other text. Only the two lines above."""
         # Get current state
         account = self.alpaca.get_account()
         portfolio_value = account["portfolio_value"]
+        buying_power = account["buying_power"]
         current_positions = self.alpaca.get_positions()
 
         logger.info(f"Portfolio: ${portfolio_value:,.2f} | Positions: {len(current_positions)}")
@@ -649,7 +657,7 @@ Do NOT include any other text. Only the two lines above."""
                 if action == "buy" and not existing_pos:
                     sizing = self.risk_manager.calculate_position_size(
                         ticker, price, conviction, portfolio_value,
-                        current_positions, allocation_pct
+                        current_positions, allocation_pct, buying_power
                     )
                     if sizing["action"] == "skip":
                         result["status"] = "skipped"
@@ -678,7 +686,7 @@ Do NOT include any other text. Only the two lines above."""
                     # Open long
                     sizing = self.risk_manager.calculate_position_size(
                         ticker, price, conviction, portfolio_value,
-                        current_positions, allocation_pct
+                        current_positions, allocation_pct, buying_power
                     )
                     if sizing["action"] != "skip":
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
@@ -710,7 +718,7 @@ Do NOT include any other text. Only the two lines above."""
                 elif action == "sell" and not existing_pos:
                     sizing = self.risk_manager.calculate_position_size(
                         ticker, price, conviction, portfolio_value,
-                        current_positions, allocation_pct
+                        current_positions, allocation_pct, buying_power
                     )
                     if sizing["action"] == "skip":
                         result["status"] = "skipped"
@@ -750,6 +758,7 @@ Do NOT include any other text. Only the two lines above."""
                 try:
                     account = self.alpaca.get_account()
                     portfolio_value = account["portfolio_value"]
+                    buying_power = account["buying_power"]
                     current_positions = self.alpaca.get_positions()
                     pos_by_ticker = {p["ticker"]: p for p in current_positions}
                     logger.info(f"State refreshed: portfolio=${portfolio_value:,.2f}, positions={len(current_positions)}")
