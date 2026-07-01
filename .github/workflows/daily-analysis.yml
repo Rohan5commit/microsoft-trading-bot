@@ -49,7 +49,7 @@ jobs:
             bot/trades.json
           key: trading-state-${{ github.ref_name }}
           restore-keys: |
-            trading-state-${{ github.ref_name }}-
+            trading-state-
 
       - name: Install dependencies
         run: |

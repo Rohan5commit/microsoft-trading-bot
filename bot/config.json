@@ -5,12 +5,7 @@
     "refresh_days": 30
   },
   "trading": {
-    "mode": "paper",
-    "universe_file": "universe.json",
-    "analysis_time": "14:00",
-    "timezone": "US/Eastern",
-    "holding_period_days": 5,
-    "min_volume": 1000000
+    "universe_file": "universe.json"
   },
   "llm": {
     "provider": "nvidia",

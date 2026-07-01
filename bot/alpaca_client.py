@@ -9,10 +9,9 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
     LimitOrderRequest,
     MarketOrderRequest,
-    StopLimitOrderRequest,
     StopOrderRequest,
 )
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame

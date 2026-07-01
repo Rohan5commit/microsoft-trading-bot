@@ -384,7 +384,7 @@ class EmailSender:
             </div>
             """
 
-        html = f"""
+        email_html = f"""
         <!DOCTYPE html>
         <html>
         <head>
@@ -452,7 +452,7 @@ class EmailSender:
         </html>
         """
 
-        return html
+        return email_html
 
 
     def send_error_notification(self, error_message: str, traceback_str: str = "") -> bool:
