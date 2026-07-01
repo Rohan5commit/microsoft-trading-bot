@@ -82,7 +82,7 @@ jobs:
           cd bot
           if [ -n "$INPUT_TICKERS" ]; then
             TICKERS=$(echo "$INPUT_TICKERS" | tr ',' ' ')
-            python two_phase_scheduler.py --tickers "$TICKERS" --deep-count "$INPUT_DEEP_COUNT" --concurrent "$INPUT_CONCURRENT"
+            python two_phase_scheduler.py --tickers $TICKERS --deep-count "$INPUT_DEEP_COUNT" --concurrent "$INPUT_CONCURRENT"
           else
             python two_phase_scheduler.py --deep-count "$INPUT_DEEP_COUNT" --concurrent "$INPUT_CONCURRENT"
           fi

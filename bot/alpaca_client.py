@@ -81,7 +81,7 @@ class AlpacaClient:
                 "current_price": float(p.current_price),
                 "unrealized_pl": float(p.unrealized_pl),
                 "unrealized_plpc": float(p.unrealized_plpc),
-                "side": "long" if str(p.side).lower() == "buy" else "short",
+                "side": str(p.side),
             }
             for p in positions
         ]
@@ -98,7 +98,7 @@ class AlpacaClient:
                 "current_price": float(p.current_price),
                 "unrealized_pl": float(p.unrealized_pl),
                 "unrealized_plpc": float(p.unrealized_plpc),
-                "side": "long" if str(p.side).lower() == "buy" else "short",
+                "side": str(p.side),
             }
         except Exception:
             return None
@@ -205,7 +205,7 @@ class AlpacaClient:
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an order by ID."""
         try:
-            self.trading_client.cancel_order(order_id)
+            self.trading_client.cancel_order_by_id(order_id)
             return True
         except Exception:
             return False

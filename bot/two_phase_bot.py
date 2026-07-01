@@ -622,19 +622,24 @@ Do NOT include any other text. Only the two lines above."""
             logger.warning("Alpaca not configured, cannot execute trades")
             return []
 
-        if not self.alpaca.is_market_open():
-            logger.warning("Market is closed, skipping trade execution")
+        # Check market and get account state - wrap to avoid destroying analysis results on API failure
+        try:
+            if not self.alpaca.is_market_open():
+                logger.warning("Market is closed, skipping trade execution")
+                return []
+
+            logger.info("=" * 60)
+            logger.info("EXECUTING TRADES")
+            logger.info("=" * 60)
+
+            # Get current state
+            account = self.alpaca.get_account()
+            portfolio_value = account["portfolio_value"]
+            buying_power = account["buying_power"]
+            current_positions = self.alpaca.get_positions()
+        except Exception as e:
+            logger.error(f"Failed to connect to Alpaca API, skipping execution: {e}")
             return []
-
-        logger.info("=" * 60)
-        logger.info("EXECUTING TRADES")
-        logger.info("=" * 60)
-
-        # Get current state
-        account = self.alpaca.get_account()
-        portfolio_value = account["portfolio_value"]
-        buying_power = account["buying_power"]
-        current_positions = self.alpaca.get_positions()
 
         logger.info(f"Portfolio: ${portfolio_value:,.2f} | Positions: {len(current_positions)}")
 
@@ -686,12 +691,12 @@ Do NOT include any other text. Only the two lines above."""
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
                         if order_status in ("filled", "accepted", "new"):
-                            result["status"] = "filled"
+                            result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
                             result["reasoning"] = sizing["reasoning"]
                             self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
-                            logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} = ${sizing['notional']:,.2f}")
+                            logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} = ${sizing['notional']:,.2f} (status={order_status})")
                         else:
                             result["status"] = "error"
                             result["reasoning"] = f"Order rejected: status={order_status}"
@@ -727,12 +732,12 @@ Do NOT include any other text. Only the two lines above."""
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
                         if order_status in ("filled", "accepted", "new"):
-                            result["status"] = "filled"
+                            result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
                             result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}) + {sizing['reasoning']}"
                             self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
-                            logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+                            logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={order_status})")
                         else:
                             result["status"] = "partial"
                             result["reasoning"] = f"Closed short (P&L: ${pnl:+,.2f}), long order rejected: {order_status}"
@@ -767,12 +772,12 @@ Do NOT include any other text. Only the two lines above."""
                         order = self.alpaca.market_sell(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
                         if order_status in ("filled", "accepted", "new"):
-                            result["status"] = "filled"
+                            result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
                             result["reasoning"] = sizing["reasoning"]
                             self.risk_manager.record_trade(ticker, "short", sizing["qty"], price, sizing["reasoning"])
-                            logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f}")
+                            logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={order_status})")
                         else:
                             result["status"] = "error"
                             result["reasoning"] = f"Order rejected: status={order_status}"
@@ -833,7 +838,7 @@ Do NOT include any other text. Only the two lines above."""
     ) -> dict:
         """Run the full two-phase analysis + execution."""
         # Use local variable instead of mutating instance state
-        effective_deep_count = deep_count if deep_count else self.deep_count
+        effective_deep_count = deep_count if deep_count is not None else self.deep_count
 
         total_start = time.time()
         logger.info("=" * 60)
