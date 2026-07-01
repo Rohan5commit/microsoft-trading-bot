@@ -81,6 +81,9 @@ Set in GitHub repo Settings > Secrets:
 | `TWELVE_DATA_KEYS` | Yes |
 | `ALPACA_API_KEY` | Optional (for trading) |
 | `ALPACA_SECRET_KEY` | Optional (for trading) |
+| `SENDER_EMAIL` | Optional (for email notifications) |
+| `RECEIVER_EMAIL` | Optional (for email notifications) |
+| `GMAIL_APP_PASSWORD` | Optional (for email notifications) |
 
 ## Files
 
@@ -90,7 +93,10 @@ Set in GitHub repo Settings > Secrets:
 | `two_phase_scheduler.py` | Entry point for GitHub Actions |
 | `twelve_data.py` | Market data with 8-key rotation |
 | `risk_manager.py` | Position sizing & risk rules |
+| `alpaca_client.py` | Alpaca paper/live trading wrapper |
+| `email_sender.py` | Gmail SMTP daily update emails |
 | `universe.py` | Stock universe management |
+| `portfolio.py` | Portfolio tracking with leverage-adjusted returns |
 | `config.json` | Configuration |
 
 ## Configuration
@@ -100,12 +106,12 @@ Edit `bot/config.json`:
 ```json
 {
   "universe": {
-    "max_stocks": 1000,
+    "max_stocks": 100,
     "min_market_cap_billion": 2
   },
   "deep_analysis": {
     "count": 20,
-    "min_conviction": 0.6
+    "min_conviction": 0.3
   },
   "llm": {
     "provider": "nvidia",

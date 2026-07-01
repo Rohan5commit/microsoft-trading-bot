@@ -39,7 +39,7 @@ class EmailSender:
         subject = f"Trading Bot - Daily Update {datetime.now().strftime('%Y-%m-%d')}"
         html_body = self._build_html(analysis_results, alpaca_status)
 
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart("mixed")
         msg["Subject"] = subject
         msg["From"] = self.sender_email
         msg["To"] = self.receiver_email
@@ -242,6 +242,9 @@ class EmailSender:
                 if status == "filled":
                     status_color = "#00c853"
                     status_text = "FILLED"
+                elif status == "submitted":
+                    status_color = "#29b6f6"
+                    status_text = "SUBMITTED"
                 elif status == "skipped":
                     status_color = "#ffd600"
                     status_text = "SKIPPED"
@@ -460,7 +463,7 @@ class EmailSender:
         subject = f"Trading Bot - ERROR {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         html_body = self._build_error_html(error_message, traceback_str)
 
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart("mixed")
         msg["Subject"] = subject
         msg["From"] = self.sender_email
         msg["To"] = self.receiver_email
