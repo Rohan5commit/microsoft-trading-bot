@@ -6,7 +6,7 @@ python-dotenv>=1.0.0,<2.0.0
 git+https://github.com/TauricResearch/TradingAgents.git@main
 
 # LLM integration (used by quick_scan and _force_allocation)
-langchain-core>=0.2.0,<0.4.0
+langchain-core>=0.3.81
 
 # Alpaca trading
 alpaca-py>=0.43.0,<1.0.0
