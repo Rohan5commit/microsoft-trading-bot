@@ -580,23 +580,29 @@ Do NOT include any other text. Only the two lines above."""
             }
 
     async def phase2_deep(self, candidates: list[dict]) -> list[dict]:
-        """Phase 2: Deep analysis on top candidates (concurrent)."""
+        """Phase 2: Deep analysis on top candidates (concurrent with throttling)."""
         if not candidates:
             return []
 
         logger.info(f"Phase 2: Deep analysis on {len(candidates)} candidates...")
         start = time.time()
 
+        # Use low concurrency for Phase 2 - each deep analysis makes 5+ API calls
+        semaphore = asyncio.Semaphore(min(3, self.max_concurrent))
+
         async def analyze_one(c):
-            logger.info(f"  Analyzing {c['ticker']}...")
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None, self.deep_analysis, c["ticker"], datetime.now().strftime("%Y-%m-%d")
-            )
-            result["scan_score"] = c["score"]
-            result["price"] = c["price"]
-            result["indicators"] = c["indicators"]
-            return result
+            async with semaphore:
+                logger.info(f"  Analyzing {c['ticker']}...")
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    None, self.deep_analysis, c["ticker"], datetime.now().strftime("%Y-%m-%d")
+                )
+                result["scan_score"] = c["score"]
+                result["price"] = c["price"]
+                result["indicators"] = c["indicators"]
+                # Small delay between analyses to respect rate limits
+                await asyncio.sleep(1.0)
+                return result
 
         tasks = [analyze_one(c) for c in candidates]
         results = await asyncio.gather(*tasks)
