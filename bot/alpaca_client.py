@@ -80,7 +80,7 @@ class AlpacaClient:
                 "current_price": float(p.current_price),
                 "unrealized_pl": float(p.unrealized_pl),
                 "unrealized_plpc": float(p.unrealized_plpc),
-                "side": str(p.side),
+                "side": p.side.value,
             }
             for p in positions
         ]
@@ -97,7 +97,7 @@ class AlpacaClient:
                 "current_price": float(p.current_price),
                 "unrealized_pl": float(p.unrealized_pl),
                 "unrealized_plpc": float(p.unrealized_plpc),
-                "side": str(p.side),
+                "side": p.side.value,
             }
         except Exception:
             return None
@@ -272,11 +272,11 @@ class AlpacaClient:
         return {
             "id": str(order.id),
             "symbol": order.symbol,
-            "side": order.side,
+            "side": order.side.value if hasattr(order.side, "value") else str(order.side),
             "qty": str(order.qty) if order.qty else None,
             "notional": str(order.notional) if order.notional else None,
-            "type": order.type,
-            "status": order.status,
+            "type": order.type.value if hasattr(order.type, "value") else str(order.type),
+            "status": order.status.value if hasattr(order.status, "value") else str(order.status),
             "filled_avg_price": str(order.filled_avg_price) if order.filled_avg_price else None,
             "submitted_at": str(order.submitted_at),
             "filled_at": str(order.filled_at) if order.filled_at else None,

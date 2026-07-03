@@ -216,7 +216,11 @@ class TwoPhaseBot:
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
             for f in futures:
-                ticker, price = f.result()
+                try:
+                    ticker, price = f.result(timeout=30)
+                except (TimeoutError, Exception):
+                    failed_count += 1
+                    continue
                 if price > 0:
                     prices[ticker] = price
                 else:
@@ -247,7 +251,11 @@ class TwoPhaseBot:
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
             for f in futures:
-                ticker, ind = f.result()
+                try:
+                    ticker, ind = f.result(timeout=30)
+                except (TimeoutError, Exception):
+                    failed_count += 1
+                    continue
                 indicators[ticker] = ind
                 if not ind:
                     failed_count += 1
