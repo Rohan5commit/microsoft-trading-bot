@@ -329,7 +329,8 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                 return await loop.run_in_executor(None, self.quick_scan, ticker, price, ind)
 
         tasks = [scan_one(t) for t in tickers]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = [r for r in results if not isinstance(r, Exception)]
 
         elapsed = time.time() - start
         logger.info(f"Phase 1 complete in {elapsed:.1f}s")
@@ -613,7 +614,8 @@ Do NOT include any other text. Only the two lines above."""
                 return result
 
         tasks = [analyze_one(c) for c in candidates]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = [r for r in results if not isinstance(r, Exception)]
 
         elapsed = time.time() - start
         logger.info(f"Phase 2 complete in {elapsed:.1f}s")
@@ -718,7 +720,7 @@ Do NOT include any other text. Only the two lines above."""
                 # CASE 2: Buy signal + short position -> Close short, open long
                 elif action == "buy" and existing_side == "short":
                     # Close short first
-                    qty_to_close = math.ceil(abs(float(existing_pos["qty"])))
+                    qty_to_close = max(1, round(abs(float(existing_pos["qty"]))))
                     entry_price = existing_pos["avg_entry_price"]
                     close_order = self.alpaca.market_buy(ticker, qty=qty_to_close)
                     fill_price = float(close_order.get("filled_avg_price") or price)
@@ -761,7 +763,7 @@ Do NOT include any other text. Only the two lines above."""
 
                 # CASE 3: Sell signal + long position -> Close long
                 elif action == "sell" and existing_side == "long":
-                    qty_to_close = math.ceil(abs(float(existing_pos["qty"])))
+                    qty_to_close = max(1, round(abs(float(existing_pos["qty"]))))
                     entry_price = existing_pos["avg_entry_price"]
                     close_order = self.alpaca.market_sell(ticker, qty=qty_to_close)
                     fill_price = float(close_order.get("filled_avg_price") or price)

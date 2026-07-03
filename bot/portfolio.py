@@ -6,6 +6,7 @@ with support for carry-forward returns across resets.
 
 import json
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -57,7 +58,6 @@ class PortfolioTracker:
 
     def _save_state(self):
         """Atomic write: write to temp file then rename."""
-        import tempfile
         dir_path = os.path.dirname(self.state_file) or "."
         tmp_path = None
         try:

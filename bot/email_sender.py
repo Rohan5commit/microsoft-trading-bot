@@ -264,7 +264,7 @@ class EmailSender:
                 signal = r.get("signal", "?")
                 signal_color = "#00c853" if signal == "buy" else "#ff1744" if signal == "sell" else "#888"
 
-                qty_str = str(r.get("qty", "-")) if r.get("qty") else "-"
+                qty_str = str(r.get("qty", "-")) if r.get("qty") is not None else "-"
                 price_str = f"${r.get('price', 0):.2f}" if r.get("price") else "-"
                 reasoning = html.escape((r.get("reasoning") or "")[:120])
 
@@ -326,13 +326,16 @@ class EmailSender:
         if buy_signals:
             buy_rows = ""
             for b in sorted(buy_signals, key=lambda x: x.get("conviction", 0), reverse=True):
-                reasoning = html.escape((b.get("reasoning") or "")[:150])
+                raw_reasoning = (b.get("reasoning") or "")
+                reasoning = html.escape(raw_reasoning[:150])
+                if len(raw_reasoning) > 150:
+                    reasoning += "..."
                 buy_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #333; color: #00c853; font-weight: bold;">{b.get('ticker', 'N/A')}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">${b.get('price', 0):.2f}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">{b.get('conviction', 0):.0%}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #333; font-size: 12px;">{reasoning}...</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333; font-size: 12px;">{reasoning}</td>
                 </tr>
                 """
             buy_html = f"""
@@ -359,13 +362,16 @@ class EmailSender:
         if sell_signals:
             sell_rows = ""
             for s in sorted(sell_signals, key=lambda x: x.get("conviction", 0), reverse=True):
-                reasoning = html.escape((s.get("reasoning") or "")[:150])
+                raw_reasoning = (s.get("reasoning") or "")
+                reasoning = html.escape(raw_reasoning[:150])
+                if len(raw_reasoning) > 150:
+                    reasoning += "..."
                 sell_rows += f"""
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #333; color: #ff1744; font-weight: bold;">{s.get('ticker', 'N/A')}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">${s.get('price', 0):.2f}</td>
                     <td style="padding: 8px; border-bottom: 1px solid #333;">{s.get('conviction', 0):.0%}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #333; font-size: 12px;">{reasoning}...</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #333; font-size: 12px;">{reasoning}</td>
                 </tr>
                 """
             sell_html = f"""

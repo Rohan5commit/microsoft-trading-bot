@@ -1,12 +1,18 @@
 """Stock universe management - top US stocks by market cap using Twelve Data."""
 
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from twelve_data import TwelveDataClient
+try:
+    from twelve_data import TwelveDataClient
+except ImportError:
+    TwelveDataClient = None
+
+logger = logging.getLogger(__name__)
 
 
 # Default top 100 US stocks by market cap (updated periodically)
@@ -45,7 +51,6 @@ def get_universe(
     cache_path = Path(__file__).parent / universe_file
     max_stocks = config.get("universe", {}).get("max_stocks", 100)
     refresh_days = config.get("universe", {}).get("refresh_days", 30)
-    min_market_cap = config.get("universe", {}).get("min_market_cap_billion", 10) * 1e9
     exclude = set(config.get("universe", {}).get("exclude", []))
 
     # Check if cache is valid
@@ -61,12 +66,12 @@ def get_universe(
             pass
 
     # Fetch fresh universe using Twelve Data
-    print("Fetching fresh stock universe via Twelve Data...")
+    logger.info("Fetching fresh stock universe via Twelve Data...")
     try:
-        tickers = _fetch_from_twelve_data(max_stocks, min_market_cap, exclude)
+        tickers = _fetch_from_twelve_data(max_stocks, exclude)
     except Exception as e:
-        print(f"Twelve Data fetch failed: {e}, using default universe")
-        tickers = _filter_default_universe(max_stocks, min_market_cap, exclude)
+        logger.warning(f"Twelve Data fetch failed: {e}, using default universe")
+        tickers = _filter_default_universe(max_stocks, exclude)
 
     # Cache the result
     cache = {
@@ -81,7 +86,6 @@ def get_universe(
 
 def _fetch_from_twelve_data(
     max_stocks: int = 100,
-    min_market_cap: float = 10e9,
     exclude: set[str] = None,
 ) -> list[str]:
     """Fetch top stocks from Twelve Data."""
@@ -112,7 +116,6 @@ def _fetch_from_twelve_data(
 
 def _filter_default_universe(
     max_stocks: int = 100,
-    min_market_cap: float = 10e9,
     exclude: set[str] = None,
 ) -> list[str]:
     """Filter default universe (fallback)."""

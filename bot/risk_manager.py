@@ -35,8 +35,8 @@ class RiskManager:
             backup = self.trades_file.with_suffix(".json.bak")
             try:
                 self.trades_file.rename(backup)
-            except OSError:
-                pass
+            except OSError as backup_err:
+                logger.warning(f"Failed to backup corrupted trades.json: {backup_err}")
             self.trades = {"positions": {}, "closed": [], "daily_pnl": {}}
 
     def _save_trades(self):
@@ -216,8 +216,10 @@ class RiskManager:
 
         exposures = []
         for pos in current_positions:
-            exposure = (pos["market_value"] / portfolio_value) * 100
-            exposures.append(exposure)
+            mv = pos.get("market_value", 0)
+            if mv and portfolio_value:
+                exposure = (mv / portfolio_value) * 100
+                exposures.append(exposure)
 
         return {
             "total_exposure": sum(exposures),

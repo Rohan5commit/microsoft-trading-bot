@@ -42,7 +42,7 @@ jobs:
           cache: 'pip'
 
       - name: Restore persistent state
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             bot/portfolio_state.json
@@ -106,3 +106,12 @@ jobs:
             bot/scheduler.log
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Save persistent state
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            bot/portfolio_state.json
+            bot/trades.json
+          key: trading-state-${{ github.ref_name }}
