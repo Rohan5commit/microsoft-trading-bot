@@ -108,7 +108,7 @@ jobs:
           retention-days: 7
 
       - name: Save persistent state
-        if: success()
+        if: steps.run_analysis.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: |

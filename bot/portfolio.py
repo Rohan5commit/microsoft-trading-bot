@@ -46,7 +46,9 @@ class PortfolioTracker:
         try:
             if os.path.exists(self.state_file):
                 with open(self.state_file) as f:
-                    return json.load(f)
+                    loaded = json.load(f)
+                    defaults.update(loaded)
+                    return defaults
         except (json.JSONDecodeError, ValueError):
             # Corrupted file - back up and start fresh
             backup = self.state_file + ".bak"

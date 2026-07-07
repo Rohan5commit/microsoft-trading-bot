@@ -9,7 +9,6 @@ Model decides everything: allocation, conviction, entry/exit. No fixed constrain
 import asyncio
 import json
 import logging
-import math
 import os
 import re
 import sys
@@ -418,6 +417,10 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             logger.error("langchain_core not available for force_allocation")
             return 0.0, None
 
+        if not TRADINGAGENTS_AVAILABLE:
+            logger.error("tradingagents not available for force_allocation")
+            return 0.0, None
+
         # Keep the conclusion section (last 500 chars) intact
         truncated = decision[-2000:] if len(decision) > 2000 else decision
 
@@ -706,7 +709,7 @@ Do NOT include any other text. Only the two lines above."""
                     else:
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
-                        if order_status in ("filled", "accepted", "new"):
+                        if order_status in ("filled", "accepted", "new", "partially_filled"):
                             result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
@@ -720,14 +723,21 @@ Do NOT include any other text. Only the two lines above."""
                 # CASE 2: Buy signal + short position -> Close short, open long
                 elif action == "buy" and existing_side == "short":
                     # Close short first
-                    qty_to_close = max(1, round(abs(float(existing_pos["qty"]))))
+                    qty_to_close = max(1, int(abs(float(existing_pos["qty"]))))
                     entry_price = existing_pos["avg_entry_price"]
                     close_order = self.alpaca.market_buy(ticker, qty=qty_to_close)
-                    fill_price = float(close_order.get("filled_avg_price") or price)
-                    pnl = (entry_price - fill_price) * qty_to_close
-                    self.risk_manager.update_daily_pnl(pnl)
-                    self.risk_manager.record_trade(ticker, "close_short", qty_to_close, fill_price, "Closing short before long")
-                    logger.info(f"CLOSE SHORT {ticker}: {qty_to_close} shares, P&L: ${pnl:+,.2f}")
+                    close_status = close_order.get("status", "")
+                    if close_status in ("filled", "accepted", "new", "partially_filled"):
+                        fill_price = float(close_order.get("filled_avg_price") or price)
+                        pnl = (entry_price - fill_price) * qty_to_close
+                        self.risk_manager.update_daily_pnl(pnl)
+                        self.risk_manager.record_trade(ticker, "close_short", qty_to_close, fill_price, "Closing short before long")
+                        logger.info(f"CLOSE SHORT {ticker}: {qty_to_close} shares, P&L: ${pnl:+,.2f}")
+                    else:
+                        logger.error(f"Failed to close short {ticker}: status={close_status}")
+                        result["status"] = "error"
+                        result["reasoning"] = f"Short close failed: {close_status}"
+                        continue
 
                     # Re-fetch portfolio state after closing short
                     try:
@@ -747,7 +757,7 @@ Do NOT include any other text. Only the two lines above."""
                     if sizing["action"] != "skip":
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
-                        if order_status in ("filled", "accepted", "new"):
+                        if order_status in ("filled", "accepted", "new", "partially_filled"):
                             result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
@@ -763,17 +773,23 @@ Do NOT include any other text. Only the two lines above."""
 
                 # CASE 3: Sell signal + long position -> Close long
                 elif action == "sell" and existing_side == "long":
-                    qty_to_close = max(1, round(abs(float(existing_pos["qty"]))))
+                    qty_to_close = max(1, int(abs(float(existing_pos["qty"]))))
                     entry_price = existing_pos["avg_entry_price"]
                     close_order = self.alpaca.market_sell(ticker, qty=qty_to_close)
-                    fill_price = float(close_order.get("filled_avg_price") or price)
-                    pnl = (fill_price - entry_price) * qty_to_close
-                    self.risk_manager.update_daily_pnl(pnl)
-                    self.risk_manager.record_trade(ticker, "sell", qty_to_close, fill_price, "Closing long on sell signal")
-                    result["status"] = "filled"
-                    result["qty"] = qty_to_close
-                    result["reasoning"] = f"Closed long: {qty_to_close} shares, P&L: ${pnl:+,.2f}"
-                    logger.info(f"SELL (close long) {ticker}: {qty_to_close} shares @ ${fill_price:.2f}, P&L: ${pnl:+,.2f}")
+                    close_status = close_order.get("status", "")
+                    if close_status in ("filled", "accepted", "new", "partially_filled"):
+                        fill_price = float(close_order.get("filled_avg_price") or price)
+                        pnl = (fill_price - entry_price) * qty_to_close
+                        self.risk_manager.update_daily_pnl(pnl)
+                        self.risk_manager.record_trade(ticker, "sell", qty_to_close, fill_price, "Closing long on sell signal")
+                        result["status"] = "filled"
+                        result["qty"] = qty_to_close
+                        result["reasoning"] = f"Closed long: {qty_to_close} shares, P&L: ${pnl:+,.2f}"
+                        logger.info(f"SELL (close long) {ticker}: {qty_to_close} shares @ ${fill_price:.2f}, P&L: ${pnl:+,.2f}")
+                    else:
+                        logger.error(f"Failed to close long {ticker}: status={close_status}")
+                        result["status"] = "error"
+                        result["reasoning"] = f"Long close failed: {close_status}"
 
                 # CASE 4: Sell signal + no position -> Open short
                 elif action == "sell" and not existing_pos:
@@ -787,7 +803,7 @@ Do NOT include any other text. Only the two lines above."""
                     else:
                         order = self.alpaca.market_sell(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
-                        if order_status in ("filled", "accepted", "new"):
+                        if order_status in ("filled", "accepted", "new", "partially_filled"):
                             result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")

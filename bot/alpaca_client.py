@@ -277,7 +277,7 @@ class AlpacaClient:
             "notional": str(order.notional) if order.notional else None,
             "type": order.type.value if hasattr(order.type, "value") else str(order.type),
             "status": order.status.value if hasattr(order.status, "value") else str(order.status),
-            "filled_avg_price": str(order.filled_avg_price) if order.filled_avg_price else None,
+            "filled_avg_price": str(order.filled_avg_price) if order.filled_avg_price and str(order.filled_avg_price) != "0" else None,
             "submitted_at": str(order.submitted_at),
             "filled_at": str(order.filled_at) if order.filled_at else None,
         }
