@@ -2,7 +2,8 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    # Run at 2:00 PM ET (18:00 UTC) on weekdays - during US market hours
+    # 18:00 UTC = 2 PM EDT (Mar-Nov) / 1 PM EST (Nov-Mar)
+    # GitHub Actions cron is UTC-only; no DST support available.
     - cron: '0 18 * * 1-5'
   workflow_dispatch:
     inputs:

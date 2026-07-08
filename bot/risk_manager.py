@@ -17,7 +17,7 @@ class RiskManager:
     def __init__(self, config: dict):
         risk_cfg = config.get("risk", {})
         self.circuit_breaker_daily_loss_pct = risk_cfg.get("circuit_breaker_daily_loss_pct", 10.0)
-        self.min_conviction = risk_cfg.get("min_conviction", 0.3)
+        self.min_conviction = config.get("deep_analysis", {}).get("min_conviction", 0.3)
 
         self.trades_file = Path(__file__).parent / "trades.json"
         self._load_trades()

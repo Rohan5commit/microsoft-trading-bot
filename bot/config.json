@@ -22,11 +22,9 @@
     "leverage": 2.0
   },
   "execution": {
-    "enabled": true,
-    "mode": "market"
+    "enabled": true
   },
   "risk": {
-    "circuit_breaker_daily_loss_pct": 10.0,
-    "min_conviction": 0.3
+    "circuit_breaker_daily_loss_pct": 10.0
   }
 }

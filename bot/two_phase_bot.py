@@ -132,7 +132,6 @@ class TwoPhaseBot:
 
         # Execution settings
         self.execution_enabled = self.config.get("execution", {}).get("enabled", False)
-        self.execution_mode = self.config.get("execution", {}).get("mode", "market")
 
         logger.info(f"Two-phase bot initialized (deep_count={self.deep_count}, execution={self.execution_enabled})")
 
@@ -310,7 +309,7 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
             logger.error(f"Quick scan failed for {ticker}: {e}")
             return {"ticker": ticker, "score": 0.0, "price": price, "indicators": indicators}
 
-    async def phase1_scan(self, tickers: list[str], prices: dict, indicators: dict) -> tuple[list[dict], float]:
+    async def phase1_scan(self, tickers: list[str], prices: dict, indicators: dict, max_candidates: int = 20) -> tuple[list[dict], float]:
         """Phase 1: Quick scan all stocks to find candidates. Returns (candidates, elapsed)."""
         logger.info(f"Phase 1: Scanning {len(tickers)} stocks...")
         start = time.time()
@@ -337,7 +336,7 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         logger.info(f"Phase 1 complete in {elapsed:.1f}s")
 
         scored = sorted(results, key=lambda x: x["score"], reverse=True)
-        candidates = [s for s in scored if s["score"] >= self.min_conviction][:self.deep_count]
+        candidates = [s for s in scored if s["score"] >= self.min_conviction][:max_candidates]
 
         logger.info(f"Found {len(candidates)} candidates (score >= {self.min_conviction})")
         for c in candidates:
@@ -899,10 +898,7 @@ Do NOT include any other text. Only the two lines above."""
         logger.info(f"Got indicators for {len(indicators)}/{len(tickers)}")
 
         # Phase 1: Quick scan
-        candidates, phase1_elapsed = await self.phase1_scan(tickers, prices, indicators)
-
-        # Limit candidates to effective_deep_count
-        candidates = candidates[:effective_deep_count]
+        candidates, phase1_elapsed = await self.phase1_scan(tickers, prices, indicators, max_candidates=effective_deep_count)
 
         # Phase 2: Deep analysis
         deep_results = await self.phase2_deep(candidates)
