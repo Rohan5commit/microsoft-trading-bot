@@ -483,27 +483,27 @@ Do NOT include any other text. Only the two lines above."""
 
         # Check for negation patterns first
         negation_patterns = [
-            r"don'?t\s+buy",
+            r"don['']?t\s+buy",
             r"do\s+not\s+buy",
             r"avoid\s+buy",
-            r"shouldn'?t\s+buy",
+            r"shouldn['']?t\s+buy",
             r"should\s+not\s+buy",
             r"not\s+a\s+buy",
             r"not\s+a\s+strong\s+buy",
             r"no\s+buy\s+signal",
             r"not\s+recommend.*buy",
-            r"wouldn'?t\s+buy",
+            r"wouldn['']?t\s+buy",
             r"would\s+not\s+buy",
-            r"don'?t\s+sell",
+            r"don['']?t\s+sell",
             r"do\s+not\s+sell",
             r"avoid\s+sell",
-            r"shouldn'?t\s+sell",
+            r"shouldn['']?t\s+sell",
             r"should\s+not\s+sell",
             r"not\s+a\s+sell",
             r"not\s+a\s+strong\s+sell",
             r"no\s+sell\s+signal",
             r"not\s+recommend.*sell",
-            r"wouldn'?t\s+sell",
+            r"wouldn['']?t\s+sell",
             r"would\s+not\s+sell",
         ]
 

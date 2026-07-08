@@ -1,6 +1,8 @@
 """Alpaca paper/live trading client wrapper."""
 
 import os
+import time
+import threading
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -56,8 +58,23 @@ class AlpacaClient:
             secret_key=self.secret_key,
         )
 
+        # Rate limiting: 200 RPM = 0.3s minimum between calls
+        self._last_call_time = 0.0
+        self._rate_lock = threading.Lock()
+        self._min_interval = 0.35  # 0.35s for safety margin
+
+    def _rate_limit(self):
+        """Enforce minimum interval between API calls."""
+        with self._rate_lock:
+            now = time.time()
+            elapsed = now - self._last_call_time
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_call_time = time.time()
+
     def get_account(self) -> dict:
         """Get account information."""
+        self._rate_limit()
         account = self.trading_client.get_account()
         return {
             "equity": float(account.equity),
@@ -70,6 +87,7 @@ class AlpacaClient:
 
     def get_positions(self) -> list[dict]:
         """Get all open positions."""
+        self._rate_limit()
         positions = self.trading_client.get_all_positions()
         return [
             {
@@ -88,6 +106,7 @@ class AlpacaClient:
     def get_position(self, ticker: str) -> Optional[dict]:
         """Get position for a specific ticker."""
         try:
+            self._rate_limit()
             p = self.trading_client.get_open_position(ticker)
             return {
                 "ticker": p.symbol,
@@ -104,11 +123,13 @@ class AlpacaClient:
 
     def get_buying_power(self) -> float:
         """Get available buying power."""
+        self._rate_limit()
         account = self.trading_client.get_account()
         return float(account.buying_power)
 
     def get_portfolio_value(self) -> float:
         """Get total portfolio value."""
+        self._rate_limit()
         account = self.trading_client.get_account()
         return float(account.portfolio_value)
 

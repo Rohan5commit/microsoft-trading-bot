@@ -5,11 +5,14 @@ with support for carry-forward returns across resets.
 """
 
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class PortfolioTracker:
@@ -51,6 +54,7 @@ class PortfolioTracker:
                     return defaults
         except (json.JSONDecodeError, ValueError):
             # Corrupted file - back up and start fresh
+            logger.warning(f"Corrupted portfolio state, backing up: {self.state_file}")
             backup = self.state_file + ".bak"
             try:
                 os.rename(self.state_file, backup)
@@ -159,6 +163,9 @@ class PortfolioTracker:
         self.state["reset_count"] = self.state.get("reset_count", 0) + 1
         self.state["last_reset_date"] = datetime.now().isoformat()
         self._save_state()
+
+        logger.info(f"Portfolio reset #{self.state['reset_count']}: "
+                    f"equity=${current_equity:,.2f}, cumulative={metrics['cumulative_return_pct']:+.2f}%")
 
         return metrics
 
