@@ -316,10 +316,13 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
         logger.info(f"Phase 1: Scanning {len(tickers)} stocks...")
         start = time.time()
 
-        semaphore = asyncio.Semaphore(self.max_concurrent)
+        # RPM limit for NVIDIA NIM is 40. Use concurrency=1 + 2s delay for Phase 1 too.
+        semaphore = asyncio.Semaphore(1)
 
         async def scan_one(ticker):
             async with semaphore:
+                # Delay BEFORE request to respect RPM limit
+                await asyncio.sleep(2.0)
                 price = prices.get(ticker, 0)
                 ind = indicators.get(ticker, {})
                 if price <= 0:
@@ -599,11 +602,13 @@ Do NOT include any other text. Only the two lines above."""
         logger.info(f"Phase 2: Deep analysis on {len(candidates)} candidates...")
         start = time.time()
 
-        # Use low concurrency for Phase 2 - each deep analysis makes 5+ API calls
-        semaphore = asyncio.Semaphore(min(3, self.max_concurrent))
+        # RPM limit for NVIDIA NIM is 40. Use concurrency=1 + 2s delay to stay well under.
+        semaphore = asyncio.Semaphore(1)
 
         async def analyze_one(c):
             async with semaphore:
+                # Delay BEFORE request to respect RPM limit
+                await asyncio.sleep(2.0)
                 logger.info(f"  Analyzing {c['ticker']}...")
                 loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(
@@ -612,8 +617,6 @@ Do NOT include any other text. Only the two lines above."""
                 result["scan_score"] = c["score"]
                 result["price"] = c["price"]
                 result["indicators"] = c["indicators"]
-                # Small delay between analyses to respect rate limits
-                await asyncio.sleep(1.0)
                 return result
 
         tasks = [analyze_one(c) for c in candidates]
