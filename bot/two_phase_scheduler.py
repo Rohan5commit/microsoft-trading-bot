@@ -22,14 +22,14 @@ logger.addHandler(_handler)
 logger.setLevel(logging.INFO)
 
 
-def run_two_phase(tickers=None, deep_count=20, concurrent=20):
+def run_two_phase(tickers=None, deep_count=20):
     """Run two-phase analysis."""
     logger.info("=" * 60)
     logger.info(f"Two-phase run started at {datetime.now()}")
 
     bot = None
     try:
-        bot = TwoPhaseBot(max_concurrent=concurrent)
+        bot = TwoPhaseBot()
         results = asyncio.run(bot.run_two_phase(tickers=tickers, deep_count=deep_count))
 
         logger.info(f"Two-phase run completed: {results['total_elapsed_seconds']:.1f}s")
@@ -57,12 +57,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Two-Phase Scheduler")
     parser.add_argument("--tickers", nargs="+", help="Specific tickers")
     parser.add_argument("--deep-count", type=int, default=20)
-    parser.add_argument("--concurrent", type=int, default=20)
 
     args = parser.parse_args()
 
     run_two_phase(
         tickers=args.tickers,
         deep_count=args.deep_count,
-        concurrent=args.concurrent,
     )

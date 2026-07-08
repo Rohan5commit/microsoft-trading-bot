@@ -14,10 +14,6 @@ on:
         description: 'Number of stocks for deep analysis'
         required: false
         default: '20'
-      concurrent:
-        description: 'Max concurrent analyses (phase 1)'
-        required: false
-        default: '20'
 
 permissions:
   contents: read
@@ -47,9 +43,9 @@ jobs:
           path: |
             bot/portfolio_state.json
             bot/trades.json
-          key: trading-state-${{ github.ref_name }}
+          key: trading-state-${{ github.ref_name }}-${{ github.run_number }}
           restore-keys: |
-            trading-state-
+            trading-state-${{ github.ref_name }}-
 
       - name: Install dependencies
         run: |
@@ -77,14 +73,13 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           INPUT_TICKERS: ${{ github.event.inputs.tickers }}
           INPUT_DEEP_COUNT: ${{ github.event.inputs.deep_count || '20' }}
-          INPUT_CONCURRENT: ${{ github.event.inputs.concurrent || '20' }}
         run: |
           cd bot
           if [ -n "$INPUT_TICKERS" ]; then
             TICKERS=$(echo "$INPUT_TICKERS" | tr ',' ' ')
-            python two_phase_scheduler.py --tickers $TICKERS --deep-count "$INPUT_DEEP_COUNT" --concurrent "$INPUT_CONCURRENT"
+            python two_phase_scheduler.py --tickers $TICKERS --deep-count "$INPUT_DEEP_COUNT"
           else
-            python two_phase_scheduler.py --deep-count "$INPUT_DEEP_COUNT" --concurrent "$INPUT_CONCURRENT"
+            python two_phase_scheduler.py --deep-count "$INPUT_DEEP_COUNT"
           fi
 
       - name: Upload results
@@ -114,4 +109,4 @@ jobs:
           path: |
             bot/portfolio_state.json
             bot/trades.json
-          key: trading-state-${{ github.ref_name }}
+          key: trading-state-${{ github.ref_name }}-${{ github.run_number }}

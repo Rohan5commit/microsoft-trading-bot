@@ -75,14 +75,13 @@ logger = logging.getLogger(__name__)
 class TwoPhaseBot:
     """Two-phase bot: quick scan + deep analysis on candidates."""
 
-    def __init__(self, config_path: Optional[str] = None, max_concurrent: int = 20):
+    def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
             config_path = Path(__file__).parent / "config.json"
 
         with open(config_path) as f:
             self.config = json.load(f)
 
-        self.max_concurrent = max_concurrent
         self.twelve_data = TwelveDataClient()
         self.risk_manager = RiskManager(self.config)
 
@@ -491,6 +490,7 @@ Do NOT include any other text. Only the two lines above."""
             r"shouldn'?t\s+buy",
             r"should\s+not\s+buy",
             r"not\s+a\s+buy",
+            r"not\s+a\s+strong\s+buy",
             r"no\s+buy\s+signal",
             r"not\s+recommend.*buy",
             r"wouldn'?t\s+buy",
@@ -501,14 +501,15 @@ Do NOT include any other text. Only the two lines above."""
             r"shouldn'?t\s+sell",
             r"should\s+not\s+sell",
             r"not\s+a\s+sell",
+            r"not\s+a\s+strong\s+sell",
             r"no\s+sell\s+signal",
             r"not\s+recommend.*sell",
             r"wouldn'?t\s+sell",
             r"would\s+not\s+sell",
         ]
 
-        has_buy_negation = any(re.search(p, lower) for p in negation_patterns[:10])
-        has_sell_negation = any(re.search(p, lower) for p in negation_patterns[10:])
+        has_buy_negation = any(re.search(p, lower) for p in negation_patterns[:11])
+        has_sell_negation = any(re.search(p, lower) for p in negation_patterns[11:])
 
         # Strong signals
         strong_buy = any(w in lower for w in ["strong buy", "strong buy signal", "high conviction buy", "overweight", "accumulate"])
@@ -519,9 +520,9 @@ Do NOT include any other text. Only the two lines above."""
         conclusion_has_buy = any(w in conclusion for w in ["buy", "buy signal", "go long", "long position"])
         conclusion_has_sell = any(w in conclusion for w in ["sell", "sell signal", "go short", "short position"])
 
-        # General mentions (anywhere in text)
-        mention_buy = any(w in lower for w in ["buy", "accumulate"])
-        mention_sell = any(w in lower for w in ["sell", "reduce"])
+        # General mentions (anywhere in text) — use specific phrases, not bare "buy"
+        mention_buy = any(w in lower for w in ["buy signal", "go long", "long position", "accumulate", "buy recommendation"])
+        mention_sell = any(w in lower for w in ["sell signal", "go short", "short position", "reduce position", "sell recommendation"])
 
         # Decision logic: conclusion > strong signals > mentions, with negation override
         if has_buy_negation and not mention_buy:
@@ -569,7 +570,10 @@ Do NOT include any other text. Only the two lines above."""
             if action != "hold":
                 conviction, allocation = self._extract_conviction_and_allocation(decision or "", action)
                 if allocation is None:
-                    conviction, allocation = self._force_allocation(ticker, decision or "", action)
+                    forced_conviction, forced_allocation = self._force_allocation(ticker, decision or "", action)
+                    if forced_allocation is not None:
+                        conviction = forced_conviction
+                        allocation = forced_allocation
             else:
                 conviction = 0.5
                 allocation = 0.0
