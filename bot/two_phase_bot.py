@@ -980,11 +980,10 @@ def main():
     parser = argparse.ArgumentParser(description="Two-Phase Trading Bot")
     parser.add_argument("--tickers", nargs="+", help="Specific tickers")
     parser.add_argument("--deep-count", type=int, default=20, help="Number of stocks for deep analysis")
-    parser.add_argument("--concurrent", type=int, default=20)
 
     args = parser.parse_args()
 
-    bot = TwoPhaseBot(max_concurrent=args.concurrent)
+    bot = TwoPhaseBot()
     results = asyncio.run(bot.run_two_phase(tickers=args.tickers, deep_count=args.deep_count))
 
     print(f"\n{'='*60}")

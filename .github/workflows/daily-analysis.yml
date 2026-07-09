@@ -44,9 +44,9 @@ jobs:
           path: |
             bot/portfolio_state.json
             bot/trades.json
-          key: trading-state-${{ github.ref_name }}-${{ github.run_number }}
+          key: trading-state-${{ github.ref_name }}
           restore-keys: |
-            trading-state-${{ github.ref_name }}-
+            trading-state-
 
       - name: Install dependencies
         run: |
@@ -110,4 +110,4 @@ jobs:
           path: |
             bot/portfolio_state.json
             bot/trades.json
-          key: trading-state-${{ github.ref_name }}-${{ github.run_number }}
+          key: trading-state-${{ github.ref_name }}
