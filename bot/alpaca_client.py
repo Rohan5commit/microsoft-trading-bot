@@ -248,6 +248,7 @@ class AlpacaClient:
 
     def get_stock_price(self, ticker: str) -> float:
         """Get current stock price."""
+        self._rate_limit()
         from alpaca.data.requests import StockLatestQuoteRequest
         request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
         quote = self.data_client.get_stock_latest_quote(request)
@@ -266,6 +267,7 @@ class AlpacaClient:
         timeframe: TimeFrame = TimeFrame.Hour,
     ):
         """Get historical stock bars."""
+        self._rate_limit()
         request = StockBarsRequest(
             symbol_or_symbols=ticker,
             timeframe=timeframe,

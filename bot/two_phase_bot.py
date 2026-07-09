@@ -210,7 +210,7 @@ class TwoPhaseBot:
             except Exception:
                 return ticker, 0
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
             for f in futures:
                 try:
@@ -245,7 +245,7 @@ class TwoPhaseBot:
             except Exception:
                 return ticker, {}
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
             for f in futures:
                 try:
