@@ -2,9 +2,10 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    # 18:00 UTC = 2 PM EDT (Mar-Nov) / 1 PM EST (Nov-Mar)
+    # 17:00 UTC = 1 PM EDT (Mar-Nov) / 12 PM EST (Nov-Mar)
+    # 3-hour buffer before 20:00 UTC market close (4 PM EDT / 3 PM EST)
     # GitHub Actions cron is UTC-only; no DST support available.
-    - cron: '0 18 * * 1-5'
+    - cron: '0 17 * * 1-5'
   workflow_dispatch:
     inputs:
       tickers:
