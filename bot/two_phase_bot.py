@@ -715,7 +715,7 @@ Do NOT include any other text. Only the two lines above."""
                     else:
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
-                        if order_status in ("filled", "accepted", "new", "partially_filled"):
+                        if order_status in ("filled", "accepted", "new", "pending_new", "partially_filled"):
                             result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
@@ -763,7 +763,7 @@ Do NOT include any other text. Only the two lines above."""
                     if sizing["action"] != "skip":
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
-                        if order_status in ("filled", "accepted", "new", "partially_filled"):
+                        if order_status in ("filled", "accepted", "new", "pending_new", "partially_filled"):
                             result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
@@ -809,7 +809,7 @@ Do NOT include any other text. Only the two lines above."""
                     else:
                         order = self.alpaca.market_sell(ticker, qty=sizing["qty"])
                         order_status = str(order.get("status", "")).lower()
-                        if order_status in ("filled", "accepted", "new", "partially_filled"):
+                        if order_status in ("filled", "accepted", "new", "pending_new", "partially_filled"):
                             result["status"] = "filled" if order_status == "filled" else "submitted"
                             result["qty"] = sizing["qty"]
                             result["order_id"] = order.get("id")
