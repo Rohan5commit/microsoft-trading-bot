@@ -714,14 +714,31 @@ Do NOT include any other text. Only the two lines above."""
                         result["reasoning"] = sizing["reasoning"]
                     else:
                         order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
+                        order_id = order.get("id")
                         order_status = str(order.get("status", "")).lower()
                         if order_status in ("filled", "accepted", "new", "pending_new", "partially_filled"):
-                            result["status"] = "filled" if order_status == "filled" else "submitted"
-                            result["qty"] = sizing["qty"]
-                            result["order_id"] = order.get("id")
+                            # Wait for fill verification
+                            time.sleep(2.0)
+                            verified = self.alpaca.get_order_by_id(order_id) if order_id else None
+                            if verified:
+                                verified_status = str(verified.get("status", "")).lower()
+                                fill_price = verified.get("filled_avg_price")
+                                if verified_status == "filled" and fill_price:
+                                    result["status"] = "filled"
+                                    result["fill_price"] = float(fill_price)
+                                    result["qty"] = int(float(verified.get("qty", sizing["qty"])))
+                                    logger.info(f"BUY {ticker}: {result['qty']} shares @ ${float(fill_price):.2f} (FILLED)")
+                                else:
+                                    result["status"] = "submitted"
+                                    result["qty"] = sizing["qty"]
+                                    logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={verified_status})")
+                            else:
+                                result["status"] = "submitted"
+                                result["qty"] = sizing["qty"]
+                                logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={order_status})")
+                            result["order_id"] = order_id
                             result["reasoning"] = sizing["reasoning"]
                             self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
-                            logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} = ${sizing['notional']:,.2f} (status={order_status})")
                         else:
                             result["status"] = "error"
                             result["reasoning"] = f"Order rejected: status={order_status}"
@@ -808,14 +825,31 @@ Do NOT include any other text. Only the two lines above."""
                         result["reasoning"] = sizing["reasoning"]
                     else:
                         order = self.alpaca.market_sell(ticker, qty=sizing["qty"])
+                        order_id = order.get("id")
                         order_status = str(order.get("status", "")).lower()
                         if order_status in ("filled", "accepted", "new", "pending_new", "partially_filled"):
-                            result["status"] = "filled" if order_status == "filled" else "submitted"
-                            result["qty"] = sizing["qty"]
-                            result["order_id"] = order.get("id")
+                            # Wait for fill verification
+                            time.sleep(2.0)
+                            verified = self.alpaca.get_order_by_id(order_id) if order_id else None
+                            if verified:
+                                verified_status = str(verified.get("status", "")).lower()
+                                fill_price = verified.get("filled_avg_price")
+                                if verified_status == "filled" and fill_price:
+                                    result["status"] = "filled"
+                                    result["fill_price"] = float(fill_price)
+                                    result["qty"] = int(float(verified.get("qty", sizing["qty"])))
+                                    logger.info(f"SHORT {ticker}: {result['qty']} shares @ ${float(fill_price):.2f} (FILLED)")
+                                else:
+                                    result["status"] = "submitted"
+                                    result["qty"] = sizing["qty"]
+                                    logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={verified_status})")
+                            else:
+                                result["status"] = "submitted"
+                                result["qty"] = sizing["qty"]
+                                logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={order_status})")
+                            result["order_id"] = order_id
                             result["reasoning"] = sizing["reasoning"]
                             self.risk_manager.record_trade(ticker, "short", sizing["qty"], price, sizing["reasoning"])
-                            logger.info(f"SHORT {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={order_status})")
                         else:
                             result["status"] = "error"
                             result["reasoning"] = f"Order rejected: status={order_status}"
@@ -841,8 +875,8 @@ Do NOT include any other text. Only the two lines above."""
 
             execution_results.append(result)
 
-            # Re-fetch state after a filled trade to prevent stale data
-            if result["status"] == "filled":
+            # Re-fetch state after a filled or submitted trade to prevent stale data
+            if result["status"] in ("filled", "submitted"):
                 try:
                     account = self.alpaca.get_account()
                     portfolio_value = account["portfolio_value"]
@@ -862,11 +896,14 @@ Do NOT include any other text. Only the two lines above."""
 
         # Summary
         filled = [r for r in execution_results if r["status"] == "filled"]
+        submitted = [r for r in execution_results if r["status"] == "submitted"]
+        placed = filled + submitted  # Both are successful placements
         skipped = [r for r in execution_results if r["status"] == "skipped"]
         errors = [r for r in execution_results if r["status"] == "error"]
         circuit_breakers = [r for r in execution_results if r["status"] == "circuit_breaker"]
 
-        logger.info(f"Execution complete: {len(filled)} filled, {len(skipped)} skipped, {len(errors)} errors"
+        logger.info(f"Execution complete: {len(placed)} placed ({len(filled)} filled, {len(submitted)} pending), "
+                     f"{len(skipped)} skipped, {len(errors)} errors"
                      + (f", {len(circuit_breakers)} circuit breaker" if circuit_breakers else ""))
 
         return execution_results
@@ -935,6 +972,7 @@ Do NOT include any other text. Only the two lines above."""
                 "enabled": self.execution_enabled,
                 "results": execution_results,
                 "filled": len([r for r in execution_results if r.get("status") == "filled"]),
+                "submitted": len([r for r in execution_results if r.get("status") == "submitted"]),
                 "skipped": len([r for r in execution_results if r.get("status") == "skipped"]),
                 "errors": len([r for r in execution_results if r.get("status") == "error"]),
             },

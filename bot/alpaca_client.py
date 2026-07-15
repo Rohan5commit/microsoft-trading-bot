@@ -230,6 +230,15 @@ class AlpacaClient:
         except Exception:
             return False
 
+    def get_order_by_id(self, order_id: str) -> Optional[dict]:
+        """Get a specific order by ID."""
+        try:
+            self._rate_limit()
+            order = self.trading_client.get_order(order_id)
+            return self._order_to_dict(order)
+        except Exception:
+            return None
+
     def cancel_all_orders(self) -> bool:
         """Cancel all open orders."""
         try:
