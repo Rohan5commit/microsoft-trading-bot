@@ -36,7 +36,7 @@ class EmailSender:
 
     def send_daily_update(self, analysis_results: dict, alpaca_status: Optional[dict] = None) -> bool:
         """Send daily trading bot update email."""
-        subject = f"Trading Bot - Daily Update {datetime.now().strftime('%Y-%m-%d')}"
+        subject = f"Microsoft Trading Bot - Daily Update {datetime.now().strftime('%Y-%m-%d')}"
         html_body = self._build_html(analysis_results, alpaca_status)
 
         msg = MIMEMultipart("mixed")
@@ -403,7 +403,7 @@ class EmailSender:
         <body style="margin: 0; padding: 0; background-color: #0f0f23; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
             <div style="max-width: 800px; margin: 0 auto; padding: 20px;">
                 <div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 15px; padding: 30px; margin-bottom: 20px; border: 1px solid #333;">
-                    <h1 style="color: #00d4ff; margin: 0; font-size: 28px;">Trading Bot</h1>
+                    <h1 style="color: #00d4ff; margin: 0; font-size: 28px;">Microsoft Trading Bot</h1>
                     <p style="color: #888; margin: 5px 0 0 0;">Autonomous Daily Analysis Report</p>
                     <p style="color: #666; margin: 5px 0 0 0; font-size: 12px;">{now}</p>
                 </div>
@@ -453,7 +453,7 @@ class EmailSender:
                 </div>
 
                 <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-                    <p>Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
+                    <p>Microsoft Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
                     <p>This is for educational purposes only. Trading involves risk of loss.</p>
                 </div>
             </div>
@@ -466,7 +466,7 @@ class EmailSender:
 
     def send_error_notification(self, error_message: str, traceback_str: str = "") -> bool:
         """Send error notification email."""
-        subject = f"Trading Bot - ERROR {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        subject = f"Microsoft Trading Bot - ERROR {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         html_body = self._build_error_html(error_message, traceback_str)
 
         msg = MIMEMultipart("mixed")
@@ -526,7 +526,7 @@ class EmailSender:
         <body style="margin: 0; padding: 0; background-color: #0f0f23; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
             <div style="max-width: 800px; margin: 0 auto; padding: 20px;">
                 <div style="background: linear-gradient(135deg, #2e1a1a 0%, #3e1616 100%); border-radius: 15px; padding: 30px; margin-bottom: 20px; border: 1px solid #ff1744;">
-                    <h1 style="color: #ff1744; margin: 0; font-size: 28px;">Trading Bot</h1>
+                    <h1 style="color: #ff1744; margin: 0; font-size: 28px;">Microsoft Trading Bot</h1>
                     <p style="color: #ff8a80; margin: 5px 0 0 0;">ERROR REPORT</p>
                     <p style="color: #666; margin: 5px 0 0 0; font-size: 12px;">{now}</p>
                 </div>
@@ -546,7 +546,7 @@ class EmailSender:
                 </div>
 
                 <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-                    <p>Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
+                    <p>Microsoft Trading Bot | Powered by TradingAgents + NVIDIA NIM</p>
                 </div>
             </div>
         </body>
