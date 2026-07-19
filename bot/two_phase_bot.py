@@ -33,20 +33,36 @@ except ImportError:
     TradingAgentsGraph = None
 
 # NVIDIA NIM: patch analysts to use sequential tool-calls (fixes 500 errors)
+# Also patch debate agents with citation requirements for better signal quality
 if TRADINGAGENTS_AVAILABLE:
     try:
         import tradingagents.agents.analysts.market_analyst as _mkt
         import tradingagents.agents.analysts.news_analyst as _news
         import tradingagents.agents.analysts.fundamentals_analyst as _fund
+        import tradingagents.agents.researchers.bull_researcher as _bull
+        import tradingagents.agents.researchers.bear_researcher as _bear
+        import tradingagents.agents.risk_mgmt.aggressive_debator as _aggr
+        import tradingagents.agents.risk_mgmt.conservative_debator as _cons
+        import tradingagents.agents.risk_mgmt.neutral_debator as _neut
         from bot.nvidia_nim_compat import (
             create_market_analyst_nim,
             create_news_analyst_nim,
             create_fundamentals_analyst_nim,
+            create_bull_researcher_nim,
+            create_bear_researcher_nim,
+            create_aggressive_debator_nim,
+            create_conservative_debator_nim,
+            create_neutral_debator_nim,
         )
         _mkt.create_market_analyst = create_market_analyst_nim
         _news.create_news_analyst = create_news_analyst_nim
         _fund.create_fundamentals_analyst = create_fundamentals_analyst_nim
-        logger.info("NVIDIA NIM compat: analysts patched for sequential tool-calls")
+        _bull.create_bull_researcher = create_bull_researcher_nim
+        _bear.create_bear_researcher = create_bear_researcher_nim
+        _aggr.create_aggressive_debator = create_aggressive_debator_nim
+        _cons.create_conservative_debator = create_conservative_debator_nim
+        _neut.create_neutral_debator = create_neutral_debator_nim
+        logger.info("NVIDIA NIM compat: analysts + debate agents patched")
     except ImportError as e:
         logger.warning(f"NVIDIA NIM compat: patch skipped ({e})")
 
@@ -136,10 +152,15 @@ class TwoPhaseBot:
         if TRADINGAGENTS_AVAILABLE:
             self.ta_config = DEFAULT_CONFIG.copy()
             llm_cfg = self.config.get("llm", {})
+            deep_cfg = self.config.get("deep_analysis", {})
             self.ta_config["llm_provider"] = llm_cfg.get("provider", "nvidia")
             self.ta_config["deep_think_llm"] = llm_cfg.get("deep_think_model", "meta/llama-3.1-70b-instruct")
             self.ta_config["quick_think_llm"] = llm_cfg.get("quick_think_model", "meta/llama-3.1-8b-instruct")
-            self.ta_config["temperature"] = llm_cfg.get("temperature", 0.1)
+            self.ta_config["temperature"] = llm_cfg.get("temperature", 0)
+            # Deeper debates for better signal quality
+            self.ta_config["max_debate_rounds"] = deep_cfg.get("max_debate_rounds", 3)
+            self.ta_config["max_risk_discuss_rounds"] = deep_cfg.get("max_risk_discuss_rounds", 3)
+            self.ta_config["memory_log_max_entries"] = deep_cfg.get("memory_log_max_entries", 50)
         else:
             self.ta_config = {}
             logger.warning("TradingAgents not available - deep analysis disabled")
