@@ -14,7 +14,7 @@
     "temperature": 0.1
   },
   "deep_analysis": {
-    "count": 20,
+    "count": 30,
     "min_conviction": 0.3
   },
   "portfolio": {

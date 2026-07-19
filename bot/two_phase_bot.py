@@ -32,6 +32,24 @@ except ImportError:
     DEFAULT_CONFIG = {}
     TradingAgentsGraph = None
 
+# NVIDIA NIM: patch analysts to use sequential tool-calls (fixes 500 errors)
+if TRADINGAGENTS_AVAILABLE:
+    try:
+        import tradingagents.agents.analysts.market_analyst as _mkt
+        import tradingagents.agents.analysts.news_analyst as _news
+        import tradingagents.agents.analysts.fundamentals_analyst as _fund
+        from bot.nvidia_nim_compat import (
+            create_market_analyst_nim,
+            create_news_analyst_nim,
+            create_fundamentals_analyst_nim,
+        )
+        _mkt.create_market_analyst = create_market_analyst_nim
+        _news.create_news_analyst = create_news_analyst_nim
+        _fund.create_fundamentals_analyst = create_fundamentals_analyst_nim
+        logger.info("NVIDIA NIM compat: analysts patched for sequential tool-calls")
+    except ImportError as e:
+        logger.warning(f"NVIDIA NIM compat: patch skipped ({e})")
+
 try:
     from langchain_core.messages import HumanMessage
     LANGCHAIN_AVAILABLE = True
@@ -593,7 +611,7 @@ Do NOT include any other text. Only the two lines above."""
                 "action": "hold",
                 "conviction": 0,
                 "suggested_allocation_pct": None,
-                "reasoning": f"Error: {str(e)}",
+                "reasoning": f"Deep analysis failed: {type(e).__name__}",
                 "mode": "deep",
             }
 
