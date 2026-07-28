@@ -15,7 +15,7 @@ on:
       deep_count:
         description: 'Number of stocks for deep analysis'
         required: false
-        default: '20'
+        default: '30'
 
 permissions:
   contents: read
@@ -69,12 +69,12 @@ jobs:
           TRADINGAGENTS_LLM_PROVIDER: nvidia
           TRADINGAGENTS_DEEP_THINK_LLM: meta/llama-3.1-70b-instruct
           TRADINGAGENTS_QUICK_THINK_LLM: meta/llama-3.1-8b-instruct
-          TRADINGAGENTS_TEMPERATURE: "0.1"
-          TRADINGAGENTS_MAX_DEBATE_ROUNDS: "1"
-          TRADINGAGENTS_MAX_RISK_ROUNDS: "1"
+          TRADINGAGENTS_TEMPERATURE: "0"
+          TRADINGAGENTS_MAX_DEBATE_ROUNDS: "3"
+          TRADINGAGENTS_MAX_RISK_ROUNDS: "3"
           PYTHONPATH: ${{ github.workspace }}
           INPUT_TICKERS: ${{ github.event.inputs.tickers }}
-          INPUT_DEEP_COUNT: ${{ github.event.inputs.deep_count || '20' }}
+          INPUT_DEEP_COUNT: ${{ github.event.inputs.deep_count || '30' }}
         run: |
           cd bot
           if [ -n "$INPUT_TICKERS" ]; then

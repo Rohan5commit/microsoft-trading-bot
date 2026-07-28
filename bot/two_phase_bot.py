@@ -32,6 +32,8 @@ except ImportError:
     DEFAULT_CONFIG = {}
     TradingAgentsGraph = None
 
+logger = logging.getLogger(__name__)
+
 # NVIDIA NIM: patch analysts to use sequential tool-calls (fixes 500 errors)
 # Also patch debate agents with citation requirements for better signal quality
 if TRADINGAGENTS_AVAILABLE:
