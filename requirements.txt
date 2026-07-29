@@ -2,8 +2,8 @@
 requests>=2.31.0,<3.0.0
 python-dotenv>=1.0.0,<2.0.0
 
-# TradingAgents framework (install from GitHub - pinned to commit for reproducibility)
-git+https://github.com/TauricResearch/TradingAgents.git@85946c2f60768ab2dae23a5a36cd927662feef94
+# TradingAgents framework (v0.3.0 - pinned to match TauricResearch commit 85946c2f)
+tradingagents==0.3.0
 
 # Alpaca trading
 alpaca-py>=0.43.0,<1.0.0
