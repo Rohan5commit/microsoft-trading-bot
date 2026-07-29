@@ -51,7 +51,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip --no-cache-dir
-          pip install -r requirements.txt --no-cache-dir
+          pip install --no-cache-dir -v requests "python-dotenv>=1.0.0,<2.0.0" "alpaca-py>=0.43.0,<1.0.0" 2>&1 | tail -5
+          echo "--- Core deps done, installing TradingAgents ---"
+          pip install --no-cache-dir -v "tradingagents==0.3.0" 2>&1 | tail -20
+          echo "--- All deps installed ---"
 
       - name: Run two-phase analysis
         id: run_analysis
