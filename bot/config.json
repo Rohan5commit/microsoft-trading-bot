@@ -14,10 +14,10 @@
     "temperature": 0
   },
   "deep_analysis": {
-    "count": 30,
+    "count": 10,
     "min_conviction": 0.3,
-    "max_debate_rounds": 3,
-    "max_risk_discuss_rounds": 3,
+    "max_debate_rounds": 1,
+    "max_risk_discuss_rounds": 1,
     "memory_log_max_entries": 50
   },
   "portfolio": {
