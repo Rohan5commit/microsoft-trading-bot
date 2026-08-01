@@ -64,7 +64,22 @@ if TRADINGAGENTS_AVAILABLE:
         _aggr.create_aggressive_debator = create_aggressive_debator_nim
         _cons.create_conservative_debator = create_conservative_debator_nim
         _neut.create_neutral_debator = create_neutral_debator_nim
-        logger.info("NVIDIA NIM compat: analysts + debate agents patched")
+
+        # CRITICAL: Also patch tradingagents.graph.setup module directly.
+        # The lambdas in setup_graph() resolve function names from this
+        # module's globals at call time. Without this, the original
+        # functions are used even after the module-level patches above.
+        import tradingagents.graph.setup as _setup
+        _setup.create_market_analyst = create_market_analyst_nim
+        _setup.create_news_analyst = create_news_analyst_nim
+        _setup.create_fundamentals_analyst = create_fundamentals_analyst_nim
+        _setup.create_bull_researcher = create_bull_researcher_nim
+        _setup.create_bear_researcher = create_bear_researcher_nim
+        _setup.create_aggressive_debator = create_aggressive_debator_nim
+        _setup.create_conservative_debator = create_conservative_debator_nim
+        _setup.create_neutral_debator = create_neutral_debator_nim
+
+        logger.info("NVIDIA NIM compat: analysts + debate agents patched (setup module targeted)")
     except ImportError as e:
         logger.warning(f"NVIDIA NIM compat: patch skipped ({e})")
 
