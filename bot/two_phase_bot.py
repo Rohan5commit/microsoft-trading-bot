@@ -266,7 +266,10 @@ class TwoPhaseBot:
             except Exception:
                 return ticker, 0
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        num_keys = len(self.twelve_data._api_keys)
+        max_workers = min(num_keys, 8)  # match parallelism to available keys
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
             for f in futures:
                 try:
@@ -301,7 +304,10 @@ class TwoPhaseBot:
             except Exception:
                 return ticker, {}
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        num_keys = len(self.twelve_data._api_keys)
+        max_workers = min(num_keys, 8)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
             for f in futures:
                 try:
