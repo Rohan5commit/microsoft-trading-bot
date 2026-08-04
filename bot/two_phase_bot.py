@@ -83,6 +83,20 @@ if TRADINGAGENTS_AVAILABLE:
     except ImportError as e:
         logger.warning(f"NVIDIA NIM compat: patch skipped ({e})")
 
+# Reddit: reduce subreddits and increase delay to avoid 429 rate limits
+if TRADINGAGENTS_AVAILABLE:
+    try:
+        import tradingagents.dataflows.reddit as _reddit
+        _original_fetch = _reddit.fetch_reddit_posts
+        def _patched_reddit_fetch(ticker, subreddits=None, limit_per_sub=5, inter_request_delay=2.0):
+            if subreddits is None:
+                subreddits = ["wallstreetbets"]
+            return _original_fetch(ticker, subreddits=subreddits, limit_per_sub=limit_per_sub, inter_request_delay=inter_request_delay)
+        _reddit.fetch_reddit_posts = _patched_reddit_fetch
+        logger.info("Reddit patch: reduced to 1 subreddit (wallstreetbets), 2s delay")
+    except ImportError as e:
+        logger.warning(f"Reddit patch skipped ({e})")
+
 try:
     from langchain_core.messages import HumanMessage
     LANGCHAIN_AVAILABLE = True
@@ -267,7 +281,7 @@ class TwoPhaseBot:
                 return ticker, 0
 
         num_keys = len(self.twelve_data._api_keys)
-        max_workers = min(num_keys, 8)  # match parallelism to available keys
+        max_workers = min(num_keys, 4)  # Conservative: 4 workers to avoid rate limits
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
@@ -294,6 +308,7 @@ class TwoPhaseBot:
         def fetch_one(ticker):
             try:
                 rsi = self.twelve_data.get_rsi(ticker)
+                time.sleep(0.3)  # Small delay between calls to stay under rate limit
                 macd = self.twelve_data.get_macd(ticker)
                 result = {}
                 if rsi is not None:
@@ -305,7 +320,7 @@ class TwoPhaseBot:
                 return ticker, {}
 
         num_keys = len(self.twelve_data._api_keys)
-        max_workers = min(num_keys, 8)
+        max_workers = min(num_keys, 4)  # Conservative: 4 workers to avoid rate limits
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(fetch_one, t) for t in tickers]
@@ -409,8 +424,6 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
     def _extract_conviction_and_allocation(self, decision: str, action: str) -> tuple[float, Optional[float]]:
         """Extract conviction and allocation % from model decision text.
 
-        Model MUST specify allocation. If not found, returns None and trade is skipped.
-
         Returns (conviction, allocation_pct or None)
         """
         conviction = 0.7  # default
@@ -445,28 +458,24 @@ Respond with ONLY a number 0.0-1.0 (the score). Nothing else."""
                 elif any(w in lower for w in ["weak sell", "slight sell"]):
                     conviction = 0.55
 
-        # Extract allocation - model MUST provide this
-        alloc_match = re.search(r'allocat(?:ion|e)[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
-        if not alloc_match:
-            alloc_match = re.search(r'allocat(?:ion|e)\s+of\s+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
-        if alloc_match:
-            allocation = float(alloc_match.group(1))
-        else:
-            pos_match = re.search(r'position\s*(?:size)?[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
-            if pos_match:
-                allocation = float(pos_match.group(1))
-            else:
-                sizing_match = re.search(r'sizing[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
-                if sizing_match:
-                    allocation = float(sizing_match.group(1))
-                else:
-                    portfolio_match = re.search(r'(\d+\.?\d*)\s*%\s*(?:of\s+)?(?:portfolio|capital|equity)', decision, re.IGNORECASE)
-                    if portfolio_match:
-                        allocation = float(portfolio_match.group(1))
-                    else:
-                        stake_match = re.search(r'(?:put|invest|stake|size)[:\s]+(\d+\.?\d*)\s*%', decision, re.IGNORECASE)
-                        if stake_match:
-                            allocation = float(stake_match.group(1))
+        # Extract allocation - try multiple patterns
+        alloc_patterns = [
+            r'allocat(?:ion|e)[:\s]+(\d+\.?\d*)\s*%',
+            r'allocat(?:ion|e)\s+of\s+(\d+\.?\d*)\s*%',
+            r'position\s*(?:size)?[:\s]+(\d+\.?\d*)\s*%',
+            r'sizing[:\s]+(\d+\.?\d*)\s*%',
+            r'(\d+\.?\d*)\s*%\s*(?:of\s+)?(?:portfolio|capital|equity)',
+            r'(?:put|invest|stake|size)[:\s]+(\d+\.?\d*)\s*%',
+            r'(?:buy|sell|hold)\s+(\d+\.?\d*)\s*%',
+            r'(\d+\.?\d*)\s*%',
+        ]
+        for pattern in alloc_patterns:
+            match = re.search(pattern, decision, re.IGNORECASE)
+            if match:
+                val = float(match.group(1))
+                if 0.1 <= val <= 25.0:  # Sanity check: between 0.1% and 25%
+                    allocation = val
+                    break
 
         return conviction, allocation
 

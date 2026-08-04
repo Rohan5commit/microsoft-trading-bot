@@ -39,22 +39,38 @@ class TwelveDataClient:
         self._key_index = 0
         self._lock = threading.Lock()
         self.key_usage = {k: 0 for k in self._api_keys}
+        self._key_last_used = {k: 0.0 for k in self._api_keys}
+        self._min_interval = 60.0 / 8  # 7.5s between calls per key (8 req/min limit)
         self.cache_dir = Path(__file__).parent / "cache" / "twelvedata"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_key(self) -> str:
-        """Get next API key (thread-safe rotation)."""
+        """Get next available API key, respecting per-key rate limits."""
         with self._lock:
-            key = self._api_keys[self._key_index % len(self._api_keys)]
-            self._key_index += 1
-            return key
+            now = time.time()
+            # Find a key that has cooled down
+            for _ in range(len(self._api_keys)):
+                key = self._api_keys[self._key_index % len(self._api_keys)]
+                self._key_index += 1
+                elapsed = now - self._key_last_used[key]
+                if elapsed >= self._min_interval:
+                    self._key_last_used[key] = now
+                    return key
+            # All keys are rate-limited; wait for the soonest one
+            soonest_key = min(self._key_last_used, key=self._key_last_used.get)
+            wait = self._min_interval - (now - self._key_last_used[soonest_key])
+            if wait > 0:
+                time.sleep(wait)
+            self._key_last_used[soonest_key] = time.time()
+            return soonest_key
 
     def _request(self, endpoint: str, params: dict) -> dict:
         """Make API request with key rotation on rate limit."""
         # Copy params to avoid mutating the caller's dict
         params = dict(params)
+        max_retries = 3  # Try all keys up to 3 times
 
-        for _ in range(len(self._api_keys)):
+        for attempt in range(max_retries * len(self._api_keys)):
             key = self._get_key()
             params["apikey"] = key
 
@@ -69,7 +85,9 @@ class TwelveDataClient:
                 # Check for rate limit
                 if "code" in data and data["code"] == 429:
                     retry_after = float(data.get("retry_after", 1.0))
-                    time.sleep(min(retry_after, 5.0))
+                    # Exponential backoff: wait longer on each retry round
+                    backoff = min(retry_after * (1 + attempt // len(self._api_keys)), 15.0)
+                    time.sleep(backoff)
                     continue
 
                 self.key_usage[key] += 1

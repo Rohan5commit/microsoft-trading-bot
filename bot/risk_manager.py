@@ -115,14 +115,10 @@ class RiskManager:
                 "reasoning": f"Conviction {conviction:.2f} below minimum {self.min_conviction}",
             }
 
-        # Model MUST specify allocation. No fallback.
+        # Model MUST specify allocation. Use default if not provided.
         if suggested_allocation_pct is None:
-            return {
-                "qty": 0,
-                "notional": 0,
-                "action": "skip",
-                "reasoning": "Model did not specify allocation % — trade skipped",
-            }
+            suggested_allocation_pct = 5.0  # Default 5% allocation when model doesn't specify
+            logger.warning(f"Model did not specify allocation for {ticker}, using default {suggested_allocation_pct}%")
 
         # Respect 0% allocation (model says don't buy)
         if suggested_allocation_pct <= 0:
