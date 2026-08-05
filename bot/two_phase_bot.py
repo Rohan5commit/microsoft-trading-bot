@@ -930,10 +930,44 @@ Do NOT include any other text. Only the two lines above."""
                     result["status"] = "no_action"
                     result["reasoning"] = "Already short, model confirms hold"
 
-                # CASE 6: Buy signal + long position -> Hold long
+                # CASE 6: Buy signal + long position -> Add to long (average up)
                 elif action == "buy" and existing_side == "long":
-                    result["status"] = "no_action"
-                    result["reasoning"] = "Already long, model confirms hold"
+                    sizing = self.risk_manager.calculate_position_size(
+                        ticker, price, conviction, portfolio_value,
+                        current_positions, allocation_pct, buying_power
+                    )
+                    if sizing["action"] == "skip":
+                        result["status"] = "skipped"
+                        result["reasoning"] = sizing["reasoning"]
+                    else:
+                        order = self.alpaca.market_buy(ticker, qty=sizing["qty"])
+                        order_id = order.get("id")
+                        order_status = str(order.get("status", "")).lower()
+                        if order_status in ("filled", "accepted", "new", "pending_new", "partially_filled"):
+                            time.sleep(2.0)
+                            verified = self.alpaca.get_order_by_id(order_id) if order_id else None
+                            if verified:
+                                verified_status = str(verified.get("status", "")).lower()
+                                fill_price = verified.get("filled_avg_price")
+                                if verified_status == "filled" and fill_price:
+                                    result["status"] = "filled"
+                                    result["fill_price"] = float(fill_price)
+                                    result["qty"] = int(float(verified.get("qty", sizing["qty"])))
+                                    logger.info(f"BUY {ticker}: {result['qty']} shares @ ${float(fill_price):.2f} (ADD to long)")
+                                else:
+                                    result["status"] = "submitted"
+                                    result["qty"] = sizing["qty"]
+                                    logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={verified_status})")
+                            else:
+                                result["status"] = "submitted"
+                                result["qty"] = sizing["qty"]
+                                logger.info(f"BUY {ticker}: {sizing['qty']} shares @ ${price:.2f} (status={order_status})")
+                            result["order_id"] = order_id
+                            result["reasoning"] = sizing["reasoning"]
+                            self.risk_manager.record_trade(ticker, "buy", sizing["qty"], price, sizing["reasoning"])
+                        else:
+                            result["status"] = "error"
+                            result["reasoning"] = f"Order rejected: status={order_status}"
 
                 else:
                     result["status"] = "no_action"
