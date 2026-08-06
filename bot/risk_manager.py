@@ -197,6 +197,22 @@ class RiskManager:
         self.trades["daily_pnl"][today] += pnl
         self._save_trades()
 
+    def check_stop_loss(
+        self,
+        current_positions: list[dict],
+        stop_loss_pct: float = 7.0,
+    ) -> list[dict]:
+        """Check all positions for stop-loss triggers.
+
+        Returns list of positions that should be closed (unrealized loss >= stop_loss_pct).
+        """
+        to_close = []
+        for pos in current_positions:
+            unrealized_plpc = pos.get("unrealized_plpc", 0)
+            if unrealized_plpc is not None and unrealized_plpc <= -(stop_loss_pct / 100.0):
+                to_close.append(pos)
+        return to_close
+
     def get_portfolio_risk(
         self,
         current_positions: list[dict],

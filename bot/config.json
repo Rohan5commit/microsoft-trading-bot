@@ -28,6 +28,7 @@
     "enabled": true
   },
   "risk": {
-    "circuit_breaker_daily_loss_pct": 10.0
+    "circuit_breaker_daily_loss_pct": 10.0,
+    "stop_loss_pct": 7.0
   }
 }

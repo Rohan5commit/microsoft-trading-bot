@@ -745,6 +745,38 @@ Do NOT include any other text. Only the two lines above."""
             logger.warning(f"CIRCUIT BREAKER TRIPPED: {cb['reasoning']}")
             return [{"status": "circuit_breaker", "reasoning": cb["reasoning"]}]
 
+        # Stop-loss check: close positions that dropped below threshold
+        stop_loss_pct = self.config.get("risk", {}).get("stop_loss_pct", 7.0)
+        to_close = self.risk_manager.check_stop_loss(current_positions, stop_loss_pct)
+        if to_close:
+            logger.info(f"STOP-LOSS: {len(to_close)} position(s) below -{stop_loss_pct}% threshold")
+            for pos in to_close:
+                ticker = pos["ticker"]
+                qty = max(1, int(abs(float(pos["qty"]))))
+                entry_price = pos["avg_entry_price"]
+                try:
+                    close_order = self.alpaca.market_sell(ticker, qty=qty)
+                    close_status = str(close_order.get("status", "")).lower()
+                    if close_status in ("filled", "accepted", "new", "partially_filled"):
+                        fill_price = float(close_order.get("filled_avg_price") or pos["current_price"])
+                        pnl = (fill_price - entry_price) * qty
+                        self.risk_manager.update_daily_pnl(pnl)
+                        self.risk_manager.record_trade(ticker, "sell", qty, fill_price, f"Stop-loss triggered at -{stop_loss_pct}%")
+                        logger.info(f"STOP-LOSS SELL {ticker}: {qty} shares @ ${fill_price:.2f}, P&L: ${pnl:+,.2f}")
+                    else:
+                        logger.error(f"Stop-loss sell failed for {ticker}: status={close_status}")
+                except Exception as e:
+                    logger.error(f"Stop-loss error for {ticker}: {e}")
+            # Refresh account state after stop-loss sales
+            try:
+                account = self.alpaca.get_account()
+                portfolio_value = account["portfolio_value"]
+                buying_power = account["buying_power"]
+                current_positions = self.alpaca.get_positions()
+                logger.info(f"After stop-loss: Portfolio=${portfolio_value:,.2f}, Buying power=${buying_power:,.2f}, Positions={len(current_positions)}")
+            except Exception as e:
+                logger.error(f"Failed to refresh state after stop-loss: {e}")
+
         execution_results = []
 
         # Build position lookup
@@ -780,6 +812,38 @@ Do NOT include any other text. Only the two lines above."""
                         ticker, price, conviction, portfolio_value,
                         current_positions, allocation_pct, buying_power
                     )
+                    if sizing["action"] == "skip" and "qty is 0" in sizing["reasoning"] and current_positions:
+                        # Position rotation: sell worst position to fund this buy
+                        worst = min(current_positions, key=lambda p: p.get("unrealized_plpc", 0) or 0)
+                        if worst["ticker"] != ticker:
+                            sell_qty = max(1, int(abs(float(worst["qty"]))))
+                            sell_entry = worst["avg_entry_price"]
+                            try:
+                                sell_order = self.alpaca.market_sell(worst["ticker"], qty=sell_qty)
+                                sell_status = str(sell_order.get("status", "")).lower()
+                                if sell_status in ("filled", "accepted", "new", "partially_filled"):
+                                    sell_fill = float(sell_order.get("filled_avg_price") or worst["current_price"])
+                                    pnl = (sell_fill - sell_entry) * sell_qty
+                                    self.risk_manager.update_daily_pnl(pnl)
+                                    self.risk_manager.record_trade(worst["ticker"], "sell", sell_qty, sell_fill, "Rotation: selling worst to fund new buy")
+                                    logger.info(f"ROTATION SELL {worst['ticker']}: {sell_qty} shares @ ${sell_fill:.2f}, P&L: ${pnl:+,.2f}")
+                                    # Refresh buying power
+                                    time.sleep(1.0)
+                                    try:
+                                        account = self.alpaca.get_account()
+                                        buying_power = account["buying_power"]
+                                        portfolio_value = account["portfolio_value"]
+                                        current_positions = self.alpaca.get_positions()
+                                    except Exception:
+                                        pass
+                                    # Retry the buy
+                                    sizing = self.risk_manager.calculate_position_size(
+                                        ticker, price, conviction, portfolio_value,
+                                        current_positions, allocation_pct, buying_power
+                                    )
+                            except Exception as e:
+                                logger.error(f"Rotation sell failed for {worst['ticker']}: {e}")
+
                     if sizing["action"] == "skip":
                         result["status"] = "skipped"
                         result["reasoning"] = sizing["reasoning"]
